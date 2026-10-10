@@ -3,21 +3,52 @@ import { ref } from 'vue'
 
 const text = ref('')
 const sending = ref(false)
+const reply = ref('')
 
 async function send() {
   if (!text.value.trim() || sending.value) return
   sending.value = true
+  reply.value = ''
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     const response = await fetch('/talk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text.value }),
     })
-    if (!response.ok) throw new Error('发送失败')
+    if (!response.ok || !response.body) throw new Error('发送失败')
+    reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let settled = false
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      let newline: number
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        const event = JSON.parse(buffer.slice(0, newline))
+        buffer = buffer.slice(newline + 1)
+        if (event.type === 'error') throw new Error(event.error)
+        if (event.type === 'message_start' && event.message.role === 'assistant') reply.value = ''
+        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+          reply.value += event.assistantMessageEvent.delta
+        }
+        if (event.type === 'message_end' && event.message.role === 'assistant') {
+          reply.value = event.message.content
+            .filter((block: { type: string }) => block.type === 'text')
+            .map((block: { text: string }) => block.text).join('')
+        }
+        if (event.type === 'agent_settled') settled = true
+      }
+      if (done) break
+    }
+    if (!settled) throw new Error('回复连接中断，请重试')
     text.value = ''
-  } catch {
-    alert('发送失败，请重试')
+  } catch (error) {
+    reply.value += '\n' + (error instanceof Error ? error.message : '发送失败，请重试')
   } finally {
+    await reader?.cancel().catch(() => {})
+    reader?.releaseLock()
     sending.value = false
   }
 }
@@ -28,4 +59,5 @@ async function send() {
     <textarea v-model="text" aria-label="对话内容" placeholder="输入对话内容" :disabled="sending" />
     <button type="submit" :disabled="sending || !text.trim()">{{ sending ? '发送中…' : '发送' }}</button>
   </form>
+  <p style="white-space: pre-wrap">{{ reply }}</p>
 </template>
