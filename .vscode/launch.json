@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "VIP4 server",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/server/.venv/bin/python",
+      "module": "main",
+      "args": [
+      ],
+      "cwd": "${workspaceFolder}/server",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+  ]
+}
