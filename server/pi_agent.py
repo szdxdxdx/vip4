@@ -3,6 +3,8 @@ import subprocess
 from pathlib import Path
 from threading import Lock
 
+import anyio
+
 import config
 
 
@@ -36,6 +38,30 @@ class PiAgent:
         )
         self._write_lock = Lock()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(self.close)
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+        try:
+            self.process.wait(timeout=config.PI_CLOSE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+        self.process.stdin.close()
+        self.process.stdout.close()
+
     def send(self, jsonl: dict) -> None:
         with self._write_lock:
             self.process.stdin.write(json.dumps(jsonl, ensure_ascii=False).encode() + b'\n')
@@ -49,14 +75,3 @@ class PiAgent:
         if not line:
             raise RuntimeError('Pi 进程已退出')
         return json.loads(line)
-
-    def close(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-        try:
-            self.process.wait(timeout=config.PI_CLOSE_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
-        self.process.stdin.close()
-        self.process.stdout.close()

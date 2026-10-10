@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import json
 
-import anyio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -23,10 +22,8 @@ def create_app() -> FastAPI:
     @app.post("/talk")
     async def talk(body: TalkRequest):
         async def stream():
-            agent = None
             try:
-                agent = PiAgent()
-                async with asyncio.timeout(config.PI_TIMEOUT):
+                async with PiAgent() as agent, asyncio.timeout(config.PI_TIMEOUT):
                     await asyncio.to_thread(agent.send_prompt, body.text)
                     message = {}
                     while True:
@@ -47,10 +44,6 @@ def create_app() -> FastAPI:
                 yield json.dumps({"type": "error", "error": "LLM 回复超时"}) + "\n"
             except (OSError, RuntimeError, ValueError):
                 yield json.dumps({"type": "error", "error": "Pi 调用失败，请检查模型配置"}) + "\n"
-            finally:
-                if agent is not None:
-                    with anyio.CancelScope(shield=True):
-                        await anyio.to_thread.run_sync(agent.close)
 
         return StreamingResponse(stream(), media_type="application/x-ndjson", headers={
             "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
