@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import json
-from pathlib import Path
 
 import anyio
 import uvicorn
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import config
 from pi_agent import PiAgent
 
 
@@ -18,7 +18,7 @@ class TalkRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="VIP4")
+    app = FastAPI()
 
     @app.post("/talk")
     async def talk(body: TalkRequest):
@@ -26,14 +26,12 @@ def create_app() -> FastAPI:
             agent = None
             try:
                 agent = PiAgent()
-                async with asyncio.timeout(120):
-                    await asyncio.to_thread(agent.send, {
-                        "id": "talk", "type": "prompt", "message": body.text,
-                    })
+                async with asyncio.timeout(config.PI_TIMEOUT):
+                    await asyncio.to_thread(agent.send_prompt, body.text)
                     message = {}
                     while True:
                         event = await asyncio.to_thread(agent.receive)
-                        if event.get("type") == "response" and event.get("id") == "talk":
+                        if event.get("type") == "response" and event.get("command") == "prompt":
                             if not event.get("success") or event.get("data", {}).get("disposition") == "handled":
                                 raise RuntimeError("Pi 未接受对话请求")
                         elif event.get("type") == "message_end":
@@ -58,15 +56,14 @@ def create_app() -> FastAPI:
             "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
         })
 
-    webui_dir = Path(__file__).resolve().parent.parent / "webui" / "dist"
-    app.mount("/", StaticFiles(directory=webui_dir, html=True))
+    app.mount("/", StaticFiles(directory=config.VIP_WEBUI_DIST_DIR, html=True))
 
     return app
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', type=int, default=8414)
+    parser.add_argument('--host', default=config.HOST)
+    parser.add_argument('--port', type=int, default=config.PORT)
     args = parser.parse_args()
     app = create_app()
     uvicorn.run(app, host=args.host, port=args.port)

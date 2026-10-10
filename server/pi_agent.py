@@ -3,42 +3,58 @@ import subprocess
 from pathlib import Path
 from threading import Lock
 
+import config
+
 
 class PiAgent:
-    """Pi RPC 进程。send 写入一条 JSONL，receive 阻塞读取一条事件；只允许一个读取者。"""
+    def __init__(
+        self,
+        cwd: str | Path | None = None,
+        session_dir: str | Path | None = None,
+    ):
+        self.session_dir = Path(session_dir if session_dir is not None else config.VIP_SESSION_DIR).expanduser().resolve()
+        self.session_dir.mkdir(parents=True, exist_ok=True)
 
-    def __init__(self, cwd: str | Path | None = None):
+        if not config.VIP_SKILL_DIR.is_dir():
+            raise FileNotFoundError(f'Skill 目录不存在：{config.VIP_SKILL_DIR}')
+
         self.process = subprocess.Popen(
-            ['pi', '--mode', 'rpc', '--no-session', '--no-tools',
-             '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files'],
-            cwd=cwd or Path(__file__).resolve().parent,
+            [
+                'pi', 
+                '--mode', 'rpc',
+                '--tools', 'read',
+                '--no-extensions',
+                '--no-skills',
+                '--skill', str(config.VIP_SKILL_DIR),
+                '--no-prompt-templates',
+                '--no-context-files',
+                '--session-dir', str(self.session_dir),
+            ],
+            cwd=cwd if cwd is not None else config.PI_CWD,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
         )
         self._write_lock = Lock()
 
-    def send(self, jsonl: dict | str) -> None:
-        """接受 JSON 对象或单条 JSONL 字符串，自动添加换行并 flush。"""
-        command = json.loads(jsonl) if isinstance(jsonl, str) else jsonl
-        if not isinstance(command, dict):
-            raise ValueError('RPC 命令必须是 JSON 对象')
+    def send(self, jsonl: dict) -> None:
         with self._write_lock:
-            self.process.stdin.write(json.dumps(command, ensure_ascii=False).encode() + b'\n')
+            self.process.stdin.write(json.dumps(jsonl, ensure_ascii=False).encode() + b'\n')
             self.process.stdin.flush()
 
+    def send_prompt(self, prompt: str) -> None:
+        self.send({'type': 'prompt', 'message': prompt})
+
     def receive(self) -> dict:
-        """读取 stdout 的下一条 JSONL；stderr 保留为后端日志。"""
         line = self.process.stdout.readline()
         if not line:
             raise RuntimeError('Pi 进程已退出')
         return json.loads(line)
 
     def close(self) -> None:
-        """终止进程，解除阻塞读取，释放管道。"""
         if self.process.poll() is None:
             self.process.terminate()
         try:
-            self.process.wait(timeout=5)
+            self.process.wait(timeout=config.PI_CLOSE_TIMEOUT)
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()

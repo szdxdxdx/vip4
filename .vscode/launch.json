@@ -7,11 +7,10 @@
       "request": "launch",
       "python": "${workspaceFolder}/server/.venv/bin/python",
       "module": "main",
-      "args": [
-      ],
+      "args": [],
       "cwd": "${workspaceFolder}/server",
       "console": "integratedTerminal",
       "justMyCode": true
-    },
+    }
   ]
 }
