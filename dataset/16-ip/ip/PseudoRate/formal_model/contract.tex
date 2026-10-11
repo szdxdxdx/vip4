@@ -1,0 +1,108 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{PseudoRate}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{pu},
+$\Var{Yp}'$,
+$\Var{Yn}'$,
+\Var{r},
+$\Var{r}'$,
+\Var{h1},
+$\Var{h1}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{pu} \mapsto \Var{pu} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{Yp} \mapsto \Var{Yp} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\item $\var{Yn} \mapsto \Var{Yn} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: 
+\begin{itemize}
+\item $\var{r}\mapsto\Var{r}:\mathbb{N}\rightharpoonup\mathbb{R}$
+\end{itemize}
+
+\item[Parameters]: 
+\begin{itemize}
+\item $\var{h1}\mapsto\Var{h1}:\mathbb{N}\rightharpoonup\mathbb{R}$
+\end{itemize}
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{pu}) \geq 3 \\
+& \wedge \syntax{len}(\Var{r}) = \syntax{len}(\Var{h1}) = 3
+\end{align*}
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \\
+Check_1 \definedby \
+& \syntax{len}(\Var{Yp}') = \syntax{len}(\Var{Yn}') = \syntax{len}(\Var{r}') = \syntax{len}(\Var{h1}') = 3 \\
+& \wedge \Var{h1}'=\Var{h1} \\
+& \wedge \clock'=\clock \\
+Check_2 \definedby \
+& \forall 0 \leq i < 3 \cdot 
+\left(
+\begin{aligned}
+& \syntax{if } \Var{pu}[i] - \Var{r}[i] > \Var{h1}[i] \syntax{ then} \\
+& \quad \Var{Yp}'[i] = \texttt{0x0} \\
+& \quad\wedge \Var{Yn}'[i] = \texttt{0xF} \\
+& \quad\wedge \Var{r}'[i] = 0.9231 \times \Var{r}[i] + 0.07688 \\
+& \syntax{elif } \Var{pu}[i] - \Var{r}[i] < - \Var{h1}[i] \syntax{ then} \\
+& \quad \Var{Yp}'[i] = \texttt{0xF} \\
+& \quad \wedge \Var{Yn}'[i] = \texttt{0x0} \\
+& \quad \wedge \Var{r}'[i] = 0.9231 \times \Var{r}[i] - 0.07688 \\
+& \syntax{else} \\
+& \quad \Var{Yp}'[i] = \texttt{0x0} \\
+& \quad \wedge \Var{Yn}'[i] = \texttt{0x0} \\
+& \quad \wedge \Var{r}'[i] = 0.9231 \times \Var{r}[i] \\
+& \syntax{endif}
+\end{aligned}
+\right)
+\end{align*}
+\end{description}
+
+\end{document}

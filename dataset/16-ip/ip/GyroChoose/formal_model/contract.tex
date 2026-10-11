@@ -1,0 +1,98 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{GyroChoose}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{StateFlag},
+$\Var{JoinTotal}'$,
+$\Var{gyroStatus0}'$,
+$\Var{SignFlag}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{StateFlag} \mapsto \Var{StateFlag} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{JoinTotal} \mapsto \Var{JoinTotal} : \mathbb{N}$
+\item $\var{gyroStatus0} \mapsto \Var{gyroStatus0} : \mathbb{N}$
+\item $\var{SignFlag} \mapsto \Var{SignFlag} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]: None
+
+\item[Clocks]:
+$\clock,\clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{StateFlag}) \geq 9
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \wedge Check_3 \\
+Check_1 \definedby \
+& \syntax{len}(\Var{SignFlag}') = 9 \\
+& \wedge \clock'=\clock \\
+Check_2 \definedby \
+& \forall \Var{JoinTotal}' \leq i < 9 \cdot \Var{SignFlag}'[i] = 0 \\
+Check_3 \definedby \
+& \exists \Var{tempFlag} : \mathbb{N} \rightharpoonup \mathbb{R} \cdot
+\big{(} \
+\syntax{len}(\Var{tempFlag}) = 9 \wedge Check_4 \wedge Check_5 \wedge Check_6 \wedge Check_7 \
+\big{)} \\
+Check_4 \definedby \
+& \forall 0 \leq i < 9 \cdot \big{(} \ \Var{tempFlag}[i] = 1 \lhd \Var{StateFlag}[i] = \texttt{0xEB} \rhd \Var{tempFlag}[i] = 0 \ \big{)} \\
+Check_5 \definedby \
+& \Var{JoinTotal}' = \textstyle \sum_{j=0}^8 \Var{tempFlag}[j] \\
+Check_6 \definedby \
+& \forall 0 \leq i < \Var{JoinTotal}' \cdot \Var{SignFlag}'[i] = \min \{ k \mid \textstyle \sum_{j=0}^k \Var{tempFlag}[j] = i \} \\
+Check_7 \definedby \
+& \Var{gyroStatus0}' = \textstyle \sum_{i=0}^8 \Var{tempFlag}[i] \times 2^i
+\end{align*}
+
+\end{description}
+
+\end{document}

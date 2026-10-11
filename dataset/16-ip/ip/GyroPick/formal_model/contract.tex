@@ -1,0 +1,113 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{GyroPick}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \\
+\Var{wa},
+$\Var{wa\_out}'$,
+\Var{wal},
+$\Var{wal}'$,
+\Var{countPick},
+$\Var{countPick}'$,
+\Var{waThr},
+$\Var{waThr}'$,
+\Var{pickThr},
+$\Var{pickThr}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{wa} \mapsto \Var{wa} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{wa\_out} \mapsto \Var{wa\_out} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]:
+\begin{itemize}
+\item $\var{wal} \mapsto \Var{wal} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\item $\var{countPick} \mapsto \Var{countPick} : \mathbb{N} \rightharpoonup \mathbb{N}$
+\end{itemize}
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{waThr} \mapsto \Var{waThr} : \mathbb{R}$
+\item $\var{pickThr} \mapsto \Var{pickThr} : \mathbb{N}$
+\end{itemize}
+
+\item[Clocks]:
+$\clock, \clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{wa}) \geq 9 \\
+& \wedge \syntax{len}(\Var{wal}) = \syntax{len}(\Var{countPick}) = 9
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \\
+Check_1 \definedby \
+& \syntax{len}(\Var{wa\_out}') = \syntax{len}(\Var{wal}') = \syntax{len}(\Var{countPick}') = 9 \\
+& \wedge \Var{waThr}' = \Var{waThr} \\
+& \wedge \Var{pickThr}' = \Var{pickThr} \\
+& \wedge \clock'=\clock \\
+Check_2 \definedby \
+& \forall 0 \leq i < 9 \cdot
+\left(
+\begin{aligned}
+& \syntax{if } |\Var{wa}[i]-\Var{wal}[i]| > \Var{waThr} \ \wedge \ \Var{countPick}[i]+1 < \Var{pickThr} \syntax{ then} \\
+& \quad \Var{wa\_out}'[i] = \Var{wal}'[i] = \Var{wal}[i] \\
+& \quad \wedge \Var{countPick}'[i] = \Var{countPick}[i]+1 \\
+& \syntax{else} \\
+& \quad \Var{wa\_out}'[i] = \Var{wal}'[i] = \Var{wa}[i] \\
+& \quad \wedge \Var{countPick}'[i] = 0 \\
+& \syntax{endif}
+\end{aligned}
+\right)
+\end{align*}
+
+\end{description}
+
+\end{document}

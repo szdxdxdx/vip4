@@ -1,0 +1,120 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{PowerOnJudge}}
+\author{}
+
+\date{April 23, 2023}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+
+\item[Maps]:
+\var{variable} in Code $\mapsto$ \Var{variable} in Formal Specification
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{powerState} \mapsto \Var{powerState} : \mathbb{N}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{bPowerOnOk} \mapsto \Var{bPowerOnOk} : \mathbb{B}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]:
+\begin{itemize}
+\item $\var{powerPr1} \mapsto \Var{powerPr1} : \mathbb{N}$
+\item $\var{cntPowerOn} \mapsto \Var{cntPowerOn} : \mathbb{Z}$
+\item $\var{cntPowerOff} \mapsto \Var{cntPowerOff} : \mathbb{Z}$
+\end{itemize}
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{numOnPeriod} \mapsto \Var{numOnPeriod} : \mathbb{Z}$
+\item $\var{numOffPeriod} \mapsto \Var{numOffPeriod} : \mathbb{Z}$
+\end{itemize}
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \Var{powerState}=0 \\
+& \vee \Var{powerState} = 255
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& (Case_1 \vee Case_2 \vee Case_3 \vee Case_4 \vee Case_5) \wedge Unchange \\
+Case_1 \definedby \
+& \Var{powerState} = 0 \\
+& \wedge \Var{cntPowerOff} < \Var{numOffPeriod} \\
+& \wedge \Var{powerPr1}' = 0 \\
+& \wedge \Var{cntPowerOn}' = \Var{cntPowerOn} \\
+& \wedge \Var{cntPowerOff}' = \Var{cntPowerOff} + 1 \\
+Case_2 \definedby \
+& \Var{powerState} = 0 \\
+& \wedge \Var{cntPowerOff} \geq \Var{numOffPeriod} \\
+& \wedge \neg \Var{bPowerOnOk}' \\
+& \wedge \Var{powerPr1}' = 0 \\
+& \wedge \Var{cntPowerOn}' = 0 \\
+& \wedge \Var{cntPowerOff}' = \Var{cntPowerOff} \\
+Case_3 \definedby \
+& \Var{powerPr1} = 0 \\
+& \wedge \Var{powerState} = 255 \\
+& \wedge \Var{cntPowerOn}' > \Var{numOnPeriod} \\
+& \wedge \Var{bPowerOnOk}' \\
+& \wedge \Var{powerPr1}' = 255 \\
+& \wedge \Var{cntPowerOn}' = \Var{cntPowerOn} + 1 \\
+& \wedge \Var{cntPowerOff}' = 0 \\
+Case_4 \definedby \
+& \Var{powerPr1}=0 \\
+& \wedge \Var{powerState} = 255 \\
+& \wedge \Var{cntPowerOn}' \leq \Var{numOnPeriod} \\
+& \wedge \Var{powerPr1}' = 0 \\
+& \wedge \Var{cntPowerOn}' = \Var{cntPowerOn} + 1 \\
+& \wedge \Var{cntPowerOff}' = \Var{cntPowerOff} \\
+Case_5 \definedby \
+& \Var{powerState}\neq 0 \\
+& \wedge (\Var{powerPr1} \neq 0 \vee \Var{powerState} \neq 255) \\
+& \wedge \Var{powerPr1}' = \Var{powerState} \\
+& \wedge \Var{cntPowerOn}' = \Var{cntPowerOn} \\
+& \wedge \Var{cntPowerOff}' = \Var{cntPowerOff} \\
+Unchange \definedby \
+& \Var{numOnPeriod}' = \Var{numOnPeriod} \\
+& \wedge \Var{numOffPeriod}' = \Var{numOffPeriod}
+\end{align*}
+
+\end{description}
+
+\end{document}

@@ -1,0 +1,114 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{GetSSData}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \\
+$\Var{royaw}'$,
+$\Var{piyaw}'$,
+$\Var{flgSp}'$,
+\Var{ADDR\_AD\_START},
+$\Var{ADDR\_AD\_START}'$,
+\Var{AD\_SS\_LO4},
+$\Var{AD\_SS\_LO4}'$, \\
+\Var{AD\_SS\_HI8},
+$\Var{AD\_SS\_HI8}'$,
+\Var{SP\_ADDR},
+$\Var{SP\_ADDR}'$,
+\Var{SP\_BIT},
+$\Var{SP\_BIT}'$,
+\Var{chnl},
+$\Var{chnl}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]: None
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{royaw} \mapsto \Var{royaw} : \mathbb{R}$
+\item $\var{piyaw} \mapsto \Var{piyaw} : \mathbb{R}$
+\item $\var{flgSp} \mapsto \Var{flgSp} : \mathbb{N}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{ADDR\_AD\_START} \mapsto \Var{ADDR\_AD\_START} : \mathbb{N}$
+\item $\var{AD\_SS\_LO4} \mapsto \Var{AD\_SS\_LO4} : \mathbb{N}$
+\item $\var{AD\_SS\_HI8} \mapsto \Var{AD\_SS\_HI8} : \mathbb{N}$
+\item $\var{SP\_ADDR} \mapsto \Var{SP\_ADDR} : \mathbb{N}$
+\item $\var{SP\_BIT} \mapsto \Var{SP\_BIT} : \mathbb{N}$
+\item $\var{chnl} \mapsto \Var{chnl} : \mathbb{N} \rightharpoonup \mathbb{N}$
+\end{itemize}
+
+\item[Clocks]:
+$\clock,\clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{chnl}) = 2
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \\
+Check_1 \definedby \
+& \Var{ADDR\_AD\_START}' = \Var{ADDR\_AD\_START} \\
+& \wedge \Var{AD\_SS\_LO4}' = \Var{AD\_SS\_LO4} \\
+& \wedge \Var{AD\_SS\_HI8}' = \Var{AD\_SS\_HI8} \\
+& \wedge \Var{SP\_ADDR}' = \Var{SP\_ADDR} \\
+& \wedge \Var{SP\_BIT}' = \Var{SP\_BIT} \\
+& \wedge \Var{chnl}' = \Var{chnl} \\
+& \wedge \clock' = \clock+5.4 \times 10^{-6} \\
+Check_2 \definedby \
+& \exists \Var{wd}_0,\Var{wd}_1 : \mathbb{N} \cdot \\
+& \left(
+\begin{aligned}
+& \Var{royaw}' = \syntax{DiviationToFloat}(\Var{wd}_0, \texttt{0xFFF}, \texttt{0x800}, 0.00244140625) \\
+& \wedge \Var{piyaw}' = \syntax{DiviationToFloat}(\Var{wd}_1, \texttt{0xFFF}, \texttt{0x800}, 0.00244140625) \\
+\end{aligned}
+\right)
+\end{align*}
+
+\end{description}
+
+\end{document}

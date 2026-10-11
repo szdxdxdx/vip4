@@ -1,0 +1,142 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{ThreeAxisController}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \\
+\Var{workmode},
+\Var{pAngle},
+\Var{pRate},
+$\Var{u}'$,
+\Var{destRate},
+$\Var{destRate}'$,
+\Var{mController},
+$\Var{mController}'$, \\
+\Var{CTRL\_PARAM\_SAM},
+$\Var{CTRL\_PARAM\_SAM}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{workmode} \mapsto \Var{workmode} : \mathbb{N}$
+\item $\var{pAngle} \mapsto \Var{pAngle} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\item $\var{pRate} \mapsto \Var{pRate} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{u} \mapsto \Var{u} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]:
+\begin{itemize}
+\item $\var{destRate} \mapsto \Var{destRate} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\item $\var{mController} \mapsto \Var{mController}:\mathbb{N} \rightharpoonup \{\texttt{Up} : \mathbb{R}, \texttt{Ud} : \mathbb{R}, \texttt{fy} : \mathbb{R}\}$
+\end{itemize}
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{CTRL\_PARAM\_SAM}\mapsto\Var{CTRL\_PARAM\_SAM} : \mathbb{N} \rightharpoonup \{\texttt{Kp} : \mathbb{R}, \texttt{Kd} : \mathbb{R}\}$
+\end{itemize}
+
+\item[Clocks]:
+$\clock, \clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{pAngle}) \geq 2 \\
+& \wedge \syntax{len}(\Var{pRate}) \geq 3 \\
+& \wedge \syntax{len}(\Var{destRate}) = \syntax{len}(\Var{mController}) = \syntax{len}(\Var{CTRL\_PARAM\_SAM}) = 3
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \wedge Check_3 \wedge Check_4 \wedge Check_5 \wedge Check_6 \\
+Check_1 \definedby \
+& \syntax{len}(\Var{u}') = \syntax{len}(\Var{mController}') = 3 \\
+& \wedge \Var{CTRL\_PARAM\_SAM}' = \Var{CTRL\_PARAM\_SAM} \\
+& \wedge \clock' = \clock \\
+Check_2 \definedby \
+& \syntax{if } \Var{workmode} = \texttt{0x00} \ \vee \ \Var{workmode} = \texttt{0x33} \syntax{ then} \\
+& \quad \Var{destRate}' = \{0 \mapsto 0, \ 1 \mapsto 0, \ 2 \mapsto \Var{destRate}[2]\} \\
+& \syntax{elif } \Var{workmode} = \texttt{0x11} \syntax{ then} \\
+& \quad \Var{destRate}' = \{0 \mapsto 0, \ 1 \mapsto -0.5, \ 2 \mapsto \Var{destRate}[2]\} \\
+& \syntax{elif } \Var{workmode} = \texttt{0x22} \syntax{ then} \\
+& \quad \Var{destRate}' = \{0 \mapsto 0.5, \ 1 \mapsto 0, \ 2 \mapsto \Var{destRate}[2]\} \\
+& \syntax{else} \\
+& \quad \Var{destRate}' = \Var{destRate} \\
+& \syntax{endif} \\
+Check_3 \definedby \
+& \Var{mController}'[0] = 
+\left\{\!\!\!
+\begin{array}{rcl}
+\texttt{Up} &\mapsto& \max\{-8, \min\{\Var{pAngle}[0], 8\}\},\\
+\texttt{Ud} &\mapsto& \max\{-1.2, \min\{\Var{pRate}[0] - \Var{destRate}'[0], 1.2\}\},\\
+\texttt{fy} &\mapsto& \Var{mController}'[0].\texttt{Up} \times \Var{CTRL\_PARAM\_SAM}[0].\texttt{Kp} \\
+                   && + \Var{mController}'[0].\texttt{Ud} \times \Var{CTRL\_PARAM\_SAM}[0].\texttt{Kd}
+\end{array}
+\!\!\!\right\} \\
+Check_4 \definedby \
+& \Var{mController}'[1] =
+\left\{\!\!\!
+\begin{array}{rcl}
+\texttt{Up} &\mapsto& \max\{-8, \min\{\Var{pAngle}[1], 8\}\},\\
+\texttt{Ud} &\mapsto& \max\{-1.2, \min\{\Var{pRate}[0] - \Var{destRate}'[1], 1.2\}\},\\
+\texttt{fy} &\mapsto& \Var{mController}'[1].\texttt{Up} \times \Var{CTRL\_PARAM\_SAM}[1].\texttt{Kp} \\
+                   && + \Var{mController}'[1].\texttt{Ud} \times \Var{CTRL\_PARAM\_SAM}[1].\texttt{Kd}
+\end{array}
+\!\!\!\right\} \\
+Check_5 \definedby \
+& \Var{mController}'[2] =
+\left\{\!\!\!
+\begin{array}{rcl}
+\texttt{Up} &\mapsto& 0,\\
+\texttt{Ud} &\mapsto& \max\{-1.2, \min\{\Var{pRate}[2], 1.2\}\},\\
+\texttt{fy} &\mapsto& \Var{mController}'[2].\texttt{Up} \times \Var{CTRL\_PARAM\_SAM}[2].\texttt{Kp}
+\end{array}
+\!\!\!\right\} \\
+Check_6 \definedby \
+& \forall 0 \leq i < 3 \cdot \bigg{(} \Var{u}'[i] = \max\{-1.3, \ \min\{\Var{mController}'[i].\texttt{fy}, 1.3\}\} \bigg{)}
+\end{align*}
+
+\end{description}
+
+\end{document}

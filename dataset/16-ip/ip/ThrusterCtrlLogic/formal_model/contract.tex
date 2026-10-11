@@ -1,0 +1,90 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{ThrusterCtrlLogic}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{Yp},
+\Var{Yn},
+$\Var{wPulse}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{Yp} \mapsto \Var{Yp} : \mathbb{N} \rightharpoonup \mathbb{N}$
+\item $\var{Yn} \mapsto \Var{Yn} : \mathbb{N} \rightharpoonup \mathbb{N}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{wPulse} \mapsto \Var{wPulse} : \mathbb{N}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]:None
+
+\item[Clocks]:
+$\clock, \clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{Yp}) \geq 3 \\
+& \wedge \syntax{len}(\Var{Yn}) \geq 3
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+\exists \Var{x}_2,\Var{x}_3,\Var{x}_4,\Var{x}_5,\Var{x}_6,\Var{x}_7 \cdot
+\left(
+\begin{aligned}
+& \quad (\Var{x}_2=0\lhd\Var{Yp}[0]=0\rhd \Var{x}_2=1) \\
+& \wedge (\Var{x}_3=0\lhd\Var{Yn}[0]=0\rhd \Var{x}_3=1) \\
+& \wedge (\Var{x}_4=0\lhd\Var{Yp}[1]=0\rhd \Var{x}_4=1) \\
+& \wedge (\Var{x}_5=0\lhd\Var{Yn}[1]=0\rhd \Var{x}_5=1) \\
+& \wedge (\Var{x}_6=0\lhd\Var{Yp}[2]=0\rhd \Var{x}_6=1) \\
+& \wedge (\Var{x}_7=0\lhd\Var{Yn}[2]=0\rhd \Var{x}_7=1) \\
+& \wedge \Var{wPulse}' = \textstyle \sum_{i=2}^7 \big{(}\Var{x}_i \cdot 2^i \big{)} \\
+\end{aligned}
+\right) \wedge \clock'=\clock
+\end{align*}
+
+\end{description}
+
+\end{document}

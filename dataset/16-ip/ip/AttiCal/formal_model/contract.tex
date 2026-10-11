@@ -1,0 +1,111 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{AttiCal}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{workmode},
+\Var{flgSP},
+\Var{royaw},
+\Var{piyaw},
+\Var{W},
+$\Var{angle}'$,
+$\Var{rate}'$,
+\Var{Gi},
+$\Var{Gi}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{workmode} \mapsto \Var{workmode} : \mathbb{N}$
+\item $\var{flgSP} \mapsto \Var{flgSP} : \mathbb{N}$
+\item $\var{royaw} \mapsto \Var{royaw} : \mathbb{R}$
+\item $\var{piyaw} \mapsto \Var{piyaw} : \mathbb{R}$
+\item $\var{W} \mapsto \Var{W} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{angle} \mapsto \Var{angle} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\item $\var{rate} \mapsto \Var{rate} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: 
+\begin{itemize}
+\item $\var{Gi} \mapsto \Var{Gi} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[States]: None
+
+\item[Parameters]: None
+
+\item[Clocks]:
+$\clock, \clock': \mathbb{R}_{\geq0}$
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{Gi}) = 2 \ \wedge \ \syntax{len}(\Var{W}) = 3
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \ \wedge \ Check_2 \\
+Check_1 \ \definedby \
+& \syntax{len}(\Var{angle}') = \syntax{len}(\Var{Gi}') = 2 \\
+& \wedge \syntax{len}(\Var{rate}') = 3 \\
+& \wedge \Var{rate}' = \Var{W} \\
+& \wedge \clock' = \clock \\
+Check_2 \ \definedby \
+& \syntax{if } \Var{workmode} = \texttt{0x33} \syntax{ then} \\
+& \quad \syntax{if } \Var{flgSP} = \texttt{0xEB} \syntax{ then} \\
+& \quad \quad \Var{angle}' = \Var{Gi}' = \{0 \mapsto \Var{royaw}, 1 \mapsto \Var{piyaw}\} \\
+& \quad \syntax{else} \\
+& \quad \quad \Var{angle}' = \Var{Gi}' = \Var{Gi} \\
+& \quad \syntax{endif} \\
+& \syntax{else} \\
+& \quad \Var{angle}' = \{0 \mapsto 0, 1 \mapsto 0\} \\
+& \quad \wedge \Var{Gi}' = \Var{Gi} \\
+& \syntax{endif} \\
+\end{align*}
+
+\end{description}
+
+\end{document}

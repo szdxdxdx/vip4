@@ -1,0 +1,91 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{GyroAngCal}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{W},
+$\Var{Gi\_out}'$,
+\Var{Gi},
+$\Var{Gi}'$,
+\Var{ctlPeriod},
+$\Var{ctlPeriod}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{W} \mapsto \Var{W} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{Gi} \mapsto \Var{Gi\_out} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]:
+\begin{itemize}
+\item $\var{Gi} \mapsto \Var{Gi} : \mathbb{N} \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{ctlPeriod} \mapsto \Var{ctlPeriod} : \mathbb{R}$
+\end{itemize}
+
+\item[Clocks]:
+$\clock,\clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{len}(\Var{W}) \geq \syntax{len}(\Var{Gi}) = 3
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& \syntax{len}(\Var{Gi\_out}') = \syntax{len}(\Var{Gi}') = 3 \\
+& \wedge \Var{Gi\_out}'[0] = \Var{Gi}'[0] = \max\{-180, \min\{\Var{Gi}[0] + \Var{W}[0] \times \Var{ctlPeriod}, 180\}\} \\
+& \wedge \Var{Gi\_out}'[1] = \Var{Gi}'[1] = \max\{-180, \min\{\Var{Gi}[1] + \Var{W}[1] \times \Var{ctlPeriod}, 180\}\} \\
+& \wedge \Var{Gi\_out}'[2] = \Var{Gi}'[2] = \max\{-90,  \min\{\Var{Gi}[2] + \Var{W}[2] \times \Var{ctlPeriod}, 90\} \} \\
+& \wedge \Var{ctlPeriod}' = \Var{ctlPeriod} \\
+& \wedge \clock' = \clock
+\end{align*}
+
+\end{description}
+
+\end{document}

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>CBMC 验证报告 — {{ report.ip }}</title>
+  <style>
+  :root {
+    --blue:      #2a5a9a;
+    --blue-dark: #1a4a8a;
+    --green:     #1a7a1a;
+    --red:       #c00;
+    --amber:     #c87000;
+
+    --text:             #222;
+    --text-secondary:   #555;
+    --text-muted:       #777;
+    --text-faint:       #999;
+    --text-inverse:     #fff;
+    --trace-location:   #456;
+
+    --surface:          #fff;
+    --surface-code:     #f6f6f6;
+    --surface-row:      #f3f6fb;
+    --surface-trace:    #fafafa;
+    --surface-summary:  #f0f4fb;
+    --surface-hover:    #e8f0fb;
+    --surface-note:     #f0f5ff;
+    --surface-issue:    #fffdf5;
+    --surface-pass:     #e8f5e9;
+    --surface-fail:     #ffebee;
+    --surface-warn:     #fff8e1;
+    --surface-neutral:  #eceff1;
+    --surface-counterexample: #fff5f5;
+
+    --border:           #dde;
+    --border-strong:    #ccd;
+    --border-warm:      #ccb;
+    --border-control:   #bbd;
+    --border-subtle:    #eee;
+    --border-note:      #4a90d9;
+    --border-issue:     #e6a800;
+    --border-pass:      #2e7d32;
+    --border-fail:      #c62828;
+    --border-warn:      #f57f17;
+    --border-neutral:   #546e7a;
+    --border-counterexample: #f5c6c6;
+
+    --text-pass-dark:   #1b5e20;
+    --text-fail-dark:   #b71c1c;
+    --text-neutral-dark:#37474f;
+
+    --code-font: 'JetBrains Mono', 'Fira Code', Consolas, Menlo, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body { display: flex; align-items: flex-start; margin: 0; font-size: 17px; font-family: Arial, sans-serif; line-height: 1.5; color: var(--text); }
+
+  nav { position: sticky; top: 0; width: 180px; height: 100vh; flex-shrink: 0; padding: 1rem; overflow-y: auto; border-right: 1px solid var(--border); }
+  nav h3 { margin: 0 0 .5rem; padding-bottom: .4rem; border-bottom: 1px solid var(--border); color: var(--blue-dark); font-size: .95em; }
+  nav ul { margin: 0; padding: 0; list-style: none; }
+  nav li { margin: .15rem 0; }
+  nav a { display: block; padding: .15rem .4rem; border-radius: 3px; color: var(--blue); font-size: .84em; text-decoration: none; }
+  nav a:hover { background: var(--surface-summary); }
+  nav .sub { padding-left: .6rem; }
+  .case-nav-link { display: flex; align-items: flex-start; gap: 4px; color: var(--text-secondary); font-size: .8em; }
+  .case-nav-name { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+  .status-dot { display: inline-block; flex-shrink: 0; width: 7px; height: 7px; margin-top: .45em; border-radius: 50%; }
+
+  main { flex: 1; padding: 2rem; min-width: 0; }
+  h1 { margin-top: 0; padding-bottom: 0.4rem; border-bottom: 2px solid var(--blue-dark); color: var(--blue-dark); }
+  h2 { margin-top: 1.8rem; padding-left: 0.6rem; border-left: 4px solid var(--blue); color: var(--blue); }
+  h3, h4 { margin: 0; font-size: 1em; color: var(--blue); }
+  p { margin: 0.5rem 0; word-break: break-all; }
+
+  .pass { color: var(--green); }
+  .fail { color: var(--red);   }
+  .warn { color: var(--amber); }
+
+  .banner { margin: 1rem 0; padding: 0.75rem 1.1rem; border-left: 5px solid; border-radius: 5px; font-size: 1.1em; font-weight: bold; }
+  .banner.PASS         { background: var(--surface-pass); border-color: var(--border-pass); color: var(--text-pass-dark); }
+  .banner.PARTIAL_PASS { background: var(--surface-warn); border-color: var(--border-warn); color: var(--amber); }
+  .banner.FAIL         { background: var(--surface-fail); border-color: var(--border-fail); color: var(--text-fail-dark); }
+  .banner.INCONCLUSIVE, .banner.TIMEOUT, .banner.ERROR { background: var(--surface-neutral); border-color: var(--border-neutral); color: var(--text-neutral-dark); }
+
+  .overall-row { display: flex; align-items: center; gap: 2rem; margin: 0.75rem 0; padding: 0.75rem 1.1rem; border-left: 5px solid var(--blue); border-radius: 5px; background: var(--surface-summary); }
+  .overall-row strong { min-width: 8em; color: var(--blue-dark); }
+  .overall-row span { min-width: 15em; }
+
+  .duration-value { color: var(--blue-dark); }
+
+  .card-box  { margin: 0.75rem 0; padding: 0.9rem 1.1rem; border: 1px solid var(--border-warm); border-radius: 5px; }
+  .note-box  { margin: 0.5rem 0; padding: 0.5rem 0.9rem; border-left: 4px solid var(--border-note); border-radius: 3px; background: var(--surface-note); }
+
+  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin: 0.6rem 0; font-size: 1.1em; color: var(--blue-dark); }
+  .markdown-content h4 { margin: 0.5rem 0; font-size: 1em; color: var(--blue); }
+  .markdown-content h5, .markdown-content h6 { margin: 0.5rem; font-size: 1em; color: var(--text-secondary); }
+
+  .ai-note   { display: block; font-size: 0.8em; color: var(--text-faint); font-style: italic; }
+  .ai-note::before { content: "* "; }
+
+  code { padding: 1px 4px; border-radius: 3px; background: var(--surface-code); font-family: var(--code-font); font-size: 0.9em; }
+  pre  { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 5px; overflow-x: auto; background: var(--surface-code); }
+
+  table { border-collapse: collapse; width: 100%; }
+  tr:nth-child(even) td { background: var(--surface-row); }
+
+  .scroll-view { max-height: 60vh; overflow-y: auto; position: relative; }
+
+  details { margin:1rem 0; border:1px solid var(--border-strong); border-radius:5px; background:var(--surface); }
+  details > summary { display:flex; align-items:center; gap:2rem; padding:0.6rem 1rem; border-radius:5px; background:var(--surface-summary); list-style:none; cursor:pointer; }
+  details > summary::-webkit-details-marker { display:none; }
+  details[open] > summary { border-radius:5px 5px 0 0; }
+  details > summary::before { content:"▶"; flex-shrink:0; font-size:.75em; color:var(--text-secondary); }
+  details[open] > summary::before { transform:rotate(90deg); }
+  details.case > summary { display:grid; grid-template-columns:auto minmax(15rem,2fr) repeat(3,minmax(10rem,1fr)); align-items:start; gap:1rem; }
+  details.case > summary::before { align-self:start; margin-top:.25rem; }
+  .panel-content { padding: 0.9rem 1.1rem; overflow-x: auto; }
+
+  .case-statistics { font-size: 0.85em; color: var(--text-muted); }
+  .empty-message { font-size: 0.85em; color: var(--text-secondary); font-style: italic; }
+
+  .defail-block { margin: 1rem 0; padding: 0 1rem; border: 1px solid var(--border-warm); border-radius: 5px; }
+
+  .counterexample { border-color: var(--border-counterexample); }
+  .counterexample > summary { background: var(--surface-counterexample); }
+  .counterexample > summary::before { color: var(--red); }
+  .counterexample-label { font-weight: bold; color: var(--red); white-space: nowrap; }
+  .counterexample-prop  { font-family: var(--code-font); font-size: 0.85em; color: var(--text-secondary); word-break: break-all; }
+
+  .assert-table { font-family: var(--code-font); font-size: 0.9em; }
+  .assert-table th { padding: 0.45rem 0.6rem; text-align: left; background: var(--blue); color: var(--text-inverse); font-weight: normal; white-space: nowrap; }
+  .assert-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .filter-btn { padding: 4px 12px; border: 1px solid var(--border-control); border-radius: 3px; background: var(--surface); cursor: pointer; font-size: 0.9em; color: var(--text-secondary); }
+  .assert-filter:has(input[id^="filter-all-"]:checked) label[for^="filter-all-"],
+  .assert-filter:has(input[id^="filter-fail-"]:checked) label[for^="filter-fail-"] { background: var(--blue); color: var(--text-inverse); border-color: var(--blue); }
+  .assert-filter:has(input[id^="filter-fail-"]:checked) tr[data-status]:not([data-status="FAILURE"]) { display: none; }
+
+  .trace { margin: 0.5rem 0; border-collapse: collapse; width: 100%; font-family: var(--code-font); font-size: 0.9em; }
+  .trace td { padding: 0.2rem 0.5rem; border-bottom: 1px solid var(--border-subtle); vertical-align: top; word-break: break-all; }
+  .trace tr:nth-child(even) td { background: var(--surface-trace); }
+  .trace .trace-loc { color: var(--trace-location); min-width: 20%; }
+  .trace .trace-call { color: var(--blue-dark); }
+  .trace .trace-return { color: var(--text-secondary); }
+  .trace .trace-fail { color: var(--red); }
+  </style>
+</head>
+<body>
+{%- set RESULT_TEXT = {
+  'PASS': '验证通过',
+  'FAIL': '验证不通过',
+  'PARTIAL_PASS': '部分通过',
+  'TIMEOUT': '超时',
+  'INCONCLUSIVE': '无法得出结论',
+} -%}
+{%- macro result_class(s) -%}
+  {%- set u = s | upper -%}
+  {%- if u in ['PASS', 'SUCCESS'] -%}pass
+  {%- elif u in ['FAIL', 'FAILURE'] -%}fail
+  {%- else -%}warn
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro duration_text(total_seconds) -%}
+  {%- set seconds = total_seconds | int -%}
+  {%- set hours = seconds // 3600 -%}
+  {%- set minutes = (seconds % 3600) // 60 -%}
+  {%- set remaining = seconds % 60 -%}
+  {%- if hours > 0 -%}{{ hours }}小时{{ minutes }}分钟{{ remaining }}秒
+  {%- elif minutes > 0 -%}{{ minutes }}分钟{{ remaining }}秒
+  {%- else -%}{{ remaining }}秒
+  {%- endif -%}
+{%- endmacro -%}
+<nav>
+  <h3>导航</h3>
+  <ul>
+    <li><a href="#overview">概览</a></li>
+    <li>
+      <a href="#details">验证详情</a>
+      <ul class="sub">
+        {% for case in report.display_cases %}
+        <li>
+          <a class="case-nav-link" href="#case-{{ case.name }}">
+            {%- macro status_color(cbmc_status) -%}
+              {%- set cbmc = cbmc_status | upper -%}
+              {%- if cbmc == 'SUCCESS' -%}var(--green)
+              {%- elif cbmc == 'FAILURE' -%}var(--red)
+              {%- else -%}var(--amber)
+              {%- endif -%}
+            {%- endmacro -%}
+            <span class="status-dot" style="background: {{ status_color(case.conclusion.cbmc) | trim }}"></span>
+            <span class="case-nav-name">{{ case.name }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </li>
+    {% if report.ai_sections.issues %}
+    <li><a href="#issues">问题处理</a></li>
+    {% endif %}
+    <li><a href="#conclusion">验证结论</a></li>
+    <li><a href="#experience">经验总结</a></li>
+  </ul>
+</nav>
+
+<main>
+
+  <h1>CBMC 验证报告 — {{ report.ip }}</h1>
+
+  <section id="overview">
+  <header><h2>概览</h2></header>
+
+  {% for type_name, type_label in [('functional', '功能性验证'), ('nonfunctional', '非功能性验证')] %}
+  {% set overall = report.ai_agent_conclusion[type_name] %}
+  <div class="overall-row">
+    <strong>{{ type_label }}</strong>
+    <span>
+      AI Agent 结论：<span class="{{ result_class(overall) | trim }}">{{ RESULT_TEXT.get(overall, '无法得出结论') }}</span>
+    </span>
+  </div>
+  {% endfor %}
+  <div class="card-box" style="display: flex; gap: 1.5em;">
+    <span>明确得出结论的断言总数：{{ report.assertions.total }}</span>
+    <span>通过：<span class="pass">{{ report.assertions.passed }}</span></span>
+    <span>未通过：<span class="fail">{{ report.assertions.failed }}</span></span>
+  </div>
+  </section>
+
+  <section id="details">
+  <header><h2>验证详情</h2></header>
+
+  {% for case in report.display_cases %}
+  {% if loop.first or loop.previtem.case_type != case.case_type %}
+  <strong style="color: var(--blue);">{{ '非功能性验证' if case.case_type == 'nonfunctional' else '功能性验证' }}</strong>
+  {% endif %}
+  <details id="case-{{ case.name }}">
+    <summary>
+      {%- set cbmc = case.conclusion.cbmc | upper -%}
+      {%- set ai = case.conclusion.ai_agent | upper -%}
+      <div style="width: 100%; display: flex; flex-wrap: wrap;">
+        <h3 style="max-width: 90%; word-break: break-all;">{{ case.name }}</h3>
+        <div style="margin-left: auto; display: flex; gap: 1.5rem; align-items: center;">
+          <span style="min-width: 25em;">
+            CBMC 结论：<span class="{{ result_class(cbmc) | trim }}" >{{ cbmc or '-' }}</span>
+            ，用时：<span class="duration-value">{{ duration_text(case.timing.duration) | trim }}{% if case.timing.timed_out %}{% endif %}</span>
+          </span>
+          <span style="min-width: 14em;">AI Agent 结论：<span class="{{ result_class(ai) | trim }}">{{ RESULT_TEXT.get(ai, '未知') }}</span></span>
+        </div>
+      </div>
+    </summary>
+    <div class="panel-content">
+
+      {% if case.analysis %}
+      <div class="note-box">
+        <div class="ai-note">内容由 AI 生成</div>
+        <div class="markdown-content scroll-view" style="padding-right: 1em;">{{ case.analysis }}</div>
+      </div>
+      {% endif %}
+
+      {% set item = case.detail %}
+      {% set failures = item.results | selectattr("status", "eq", "FAILURE") | list %}
+      {% set uid = case.name %}
+      <div class="assert-filter">
+        <details open>
+          <summary>
+            <h4>断言详情</h4>
+            <span class="case-statistics">
+              {% if item.statistics %}
+              {{ item.statistics.total }} 条断言 / <span class="pass">{{ item.statistics.passed }} 通过</span> / <span class="fail">{{ item.statistics.failed }} 不通过</span>
+              {% else %}
+              <span class="warn">无结论</span>
+              {% endif %}
+            </span>
+          </summary>
+          <div class="panel-content">
+            {% if failures %}
+            <div style="display: flex; gap: 0.4rem; margin-bottom: 0.5rem">
+              <label for="filter-all-{{ uid }}" class="filter-btn">展示全部</label>
+              <label for="filter-fail-{{ uid }}" class="filter-btn">仅展示不通过</label>
+              <input style="display: none;" type="radio" name="assert-filter-{{ uid }}" id="filter-all-{{ uid }}" checked>
+              <input style="display: none;" type="radio" name="assert-filter-{{ uid }}" id="filter-fail-{{ uid }}">
+            </div>
+            {% endif %}
+            {% if item.results %}
+            <div class="scroll-view">
+              <table class="assert-table">
+                <thead><tr style="word-break: keep-all;">
+                  <th>#</th><th>结果</th><th>断言 ID</th><th>描述</th>
+                </tr></thead>
+                <tbody>{% for r in item.results %}
+                <tr{% if failures %} data-status="{{ r.status }}"{% endif %}>
+                  <td>{{ loop.index }}</td>
+                  <td>
+                    <strong style="word-break: keep-all;">
+                    {% if r.status == 'SUCCESS' %}<span class="pass">{{ r.status }}</span>
+                    {% elif r.status == 'FAILURE' %}<span class="fail">{{ r.status }}</span>
+                    {% else %}<span class="warn">{{ r.status }}</span>
+                    {% endif %}
+                    </strong>
+                  </td>
+                  <td>{{ r.property }}</td>
+                  <td>{{ r.description }}</td>
+                </tr>
+                {% endfor %}</tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="empty-message">无断言结果</p>
+            {% endif %}
+          </div>
+        </details>
+      </div>
+
+      {% if failures %}
+      <div>
+        {% for f in failures %}
+        <details class="counterexample">
+          <summary>
+            <span class="counterexample-label">反例 {{ loop.index }}</span>
+            <span class="counterexample-prop">{{ f.property }}</span>
+          </summary>
+          <div class="panel-content">
+            {% if f.trace %}
+            <div class="scroll-view">
+              <table class="trace">
+                <tbody>{% for s in f.trace %}
+                <tr>
+                  <td>{{ loop.index }}</td>
+                  <td class="trace-loc">{{ s.file }}:{{ s.line }}</td>
+                  {% if s.kind == "assignment" %}
+                    <td>{{ s.lhs }}{% if s.type %} ({{ s.type }}){% endif %} = {{ s.value }}</td>
+                  {% elif s.kind == "call" %}
+                    <td class="trace-call"> → {{ s.function }}()</td>
+                  {% elif s.kind == "return" %}
+                    <td class="trace-return"> ← {{ s.function }}()</td>
+                  {% elif s.kind == "failure" %}
+                    <td class="trace-fail"> ✗ {{ s.reason }}</td>
+                  {% endif %}
+                </tr>
+                {% endfor %}</tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="empty-message">无可读的反例路径</p>
+            {% endif %}
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+    </div>
+  </details>
+  {% endfor %}
+  </section>
+
+  {% if report.ai_sections.issues %}
+  <section id="issues">
+    <header><h2>验证过程中遇到的问题与处理</h2></header>
+    <div class="card-box markdown-content">
+      <div class="ai-note">内容由 AI 生成</div>
+      <div>{{ report.ai_sections.issues }}</div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section id="conclusion">
+    <header><h2>验证结论与评价</h2></header>
+    <div class="card-box markdown-content">
+      <div class="ai-note">内容由 AI 生成</div>
+      <div>{{ report.ai_sections.conclusion }}</div>
+    </div>
+  </section>
+
+  <section id="experience">
+    <header><h2>验证经验总结</h2></header>
+    <div class="card-box markdown-content">
+      <div class="ai-note">内容由 AI 生成</div>
+      <div>{{ report.ai_sections.experience }}</div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

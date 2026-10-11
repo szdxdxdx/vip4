@@ -1,0 +1,138 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{Fg333saCheck}}
+\author{}
+
+\date{April 21, 2023}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+
+\item[Maps]:
+\var{variable} in code $\mapsto$ \Var{variable} in formal specification
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{*pbuff} \mapsto \Var{pbuff} : \mathbb{N}^*$
+\item $\var{rdLen} \mapsto \Var{rdLen} : \mathbb{N}$
+\end{itemize}
+
+where $\mathbb{N}^* \triangleq \bigcup_{n\in\mathbb{N}}\mathbb{N}^n$.
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{bComSuc} \mapsto \Var{bComSuc} : \mathbb{B}$
+\item $\var{cntLenRdO} \mapsto \Var{cntLenRdO} : \mathbb{Z}$
+\item $\var{cntHeadO} \mapsto \Var{cntHeadO} : \mathbb{Z}$
+\item $\var{cntCheckO} \mapsto \Var{cntCheckO} : \mathbb{Z}$
+\item $\var{cntUpdataO} \mapsto \Var{cntUpdataO} : \mathbb{Z}$
+\item $\var{totalLenRdO} \mapsto \Var{totalLenRdO} : \mathbb{Z}$
+\item $\var{totalHeadO} \mapsto \Var{totalHeadO} : \mathbb{Z}$
+\item $\var{totalCheckO} \mapsto \Var{totalCheckO} : \mathbb{Z}$
+\item $\var{totalUpdataO} \mapsto \Var{totalUpdataO} : \mathbb{Z}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]:
+\begin{itemize}
+\item $\var{frm} \mapsto \Var{frm} : \mathbb{N}$
+\item $\var{cntLenRdS} \mapsto \Var{cntLenRdS} : \mathbb{Z}$
+\item $\var{cntHeadS} \mapsto \Var{cntHeadS} : \mathbb{Z}$
+\item $\var{cntCheckS} \mapsto \Var{cntCheckS} : \mathbb{Z}$
+\item $\var{cntUpdataS} \mapsto \Var{cntUpdataS} : \mathbb{Z}$
+\item $\var{totalLenRdS} \mapsto \Var{totalLenRdS} : \mathbb{Z}$
+\item $\var{totalHeadS} \mapsto \Var{totalHeadS} : \mathbb{Z}$
+\item $\var{totalCheckS} \mapsto \Var{totalCheckS} : \mathbb{Z}$
+\item $\var{totalUpdataS} \mapsto \Var{totalUpdataS} : \mathbb{Z}$
+\end{itemize}
+
+\item[Parameters]: None
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \Var{rdLen} = 19 \Rightarrow |\Var{pbuff}| \geq 19
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& \exists \ \Var{pbuff}, \Var{rdLen} \cdot ( \ Check_1 \ ) \\
+Check_1 \definedby \
+& \syntax{if } \Var{rdLen} = 19 \syntax{ then} \\
+& \quad \Var{cntLenRdS} := 0 \\
+& \quad \wedge Check_2 \\
+& \syntax{else} \\
+& \quad \Var{cntLenRdS} := \Var{cntLenRdS} + 1 \\
+& \quad \wedge \Var{totalLenRdS} := \Var{totalLenRdS} + 1 \\
+& \quad \wedge \Var{cntLenRdO} := \Var{cntLenRdO} + 1 \\
+& \quad \wedge \Var{totalLenRdO} := \Var{totalLenRdO} + 1 \\
+& \quad \wedge \Var{bComSuc} := \text{False} \\
+& \syntax{endif} \\
+Check_2 \definedby \
+& \syntax{if } \Var{pbuff}_{17} \neq \Var{frm} \syntax{ then} \\
+& \quad (\Var{cntUpdataS}, \Var{cntUpdataO}, \Var{frm}) := (0, 0, \Var{pbuff}_{17}) \\
+& \quad \wedge Check_3 \\
+& \syntax{else} \\
+& \quad \Var{cntUpdataS} := \Var{cntUpdataS} + 1 \\
+& \quad \wedge \Var{totalUpdataS} := \Var{totalUpdataS} + 1 \\
+& \quad \wedge \Var{cntUpdataO} := \Var{cntUpdataO} + 1 \\
+& \quad \wedge \Var{totalUpdataO} := \Var{totalUpdataO} + 1 \\
+& \quad \wedge \Var{bComSuc} := \text{False} \\
+& \syntax{endif} \\
+Check_3 \definedby \
+& \syntax{if } \Var{pbuff}_{0} = 235 \wedge \Var{pbuff}_{1} = 144 \syntax{ then} \\
+& \quad (\Var{cntHeadS}, \Var{cntHeadO}) := (0, 0) \\
+& \quad \wedge Check_4 \\
+& \syntax{else} \\
+& \quad \Var{cntHeadS} := \Var{cntHeadS} + 1 \\
+& \quad \wedge \Var{totalHeadS} := \Var{totalHeadS} + 1 \\
+& \quad \wedge \Var{cntHeadO} := \Var{cntHeadO} + 1 \\
+& \quad \wedge \Var{totalHeadO} := \Var{totalHeadO} + 1 \\
+& \quad \wedge \Var{bComSuc} := \text{False} \\
+& \syntax{endif} \\
+Check_4 \definedby \
+& \syntax{if } (\textstyle \sum_{i=0}^{17} \Var{pbuff}_i) \% 255 = \Var{pbuff}_{18} \syntax{ then} \\
+& \quad (\Var{cntCheckS}, \Var{cntCheckO}, \Var{bComSuc}) := (0, 0, \text{True}) \\
+& \syntax{else} \\
+& \quad \Var{cntCheckS} := \Var{cntCheckS} + 1 \\
+& \quad \wedge \Var{totalCheckS} := \Var{totalCheckS} + 1 \\
+& \quad \wedge \Var{cntCheckO} := \Var{cntCheckO} + 1 \\
+& \quad \wedge \Var{totalCheckO} := \Var{totalCheckO} + 1 \\
+& \syntax{endif}
+\end{align*}
+
+\end{description}
+
+\end{document}

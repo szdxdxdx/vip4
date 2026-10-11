@@ -1,0 +1,94 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{Fg333saUnPack}}
+\author{}
+
+\date{April 21, 2023}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+
+\item[Maps]:
+\var{variable} in code $\mapsto$ \Var{variable} in formal specification
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{*pRecvbuf} \mapsto \Var{pRecvbuf} : \mathbb{N}^*$
+\end{itemize}
+
+where $\mathbb{N}^* = \bigcup_{n \in \mathbb{N}} \mathbb{N}^n$.
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{gf} \mapsto \Var{gf} : \mathbb{R}$
+\item $\var{wt0} \mapsto \Var{wt0} : \mathbb{R}$
+\item $\var{glwd1} \mapsto \Var{glwd1} : \mathbb{N}$
+\item $\var{glwd2} \mapsto \Var{glwd2} : \mathbb{N}$
+\item $\var{dlwd} \mapsto \Var{dlwd} : \mathbb{N}$
+\item $\var{status} \mapsto \Var{status} : \mathbb{N}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{dtime} \mapsto \Var{dtime} : \mathbb{R}$
+\end{itemize}
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& |\Var{pRecvbuf}| \geq 17
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& \exists\Var{pbuff}' \cdot (\textit{Assign}_1 \wedge \textit{Assign}_2 \wedge \textit{Assign}_3 \wedge \textit{Assign}_4 \wedge \textit{Assign}_5 \wedge \textit{Assign}_6) \\
+\textit{Assign}_1 \definedby \
+& \Var{wt0} := \dfrac{2^{12} \Var{pRecvbuf}_2 + 2^8 \Var{pRecvbuf}_3 + 2^4 \Var{pRecvbuf}_4 + \Var{pRecvbuf}_5}{3\cdot 10^6 \cdot0.0174532925199433} \\
+\textit{Assign}_2 \definedby \
+& \Var{glwd1} := 2^4 \cdot \Var{pRecvbuf}_6 + \Var{pRecvbuf}_7 \\
+\textit{Assign}_3 \definedby \
+& \Var{glwd2} := 2^4 \cdot \Var{pRecvbuf}_8 + \Var{pRecvbuf}_9 \\
+\textit{Assign}_4 \definedby \
+& \Var{dlwd} := 2^4 \cdot \Var{pRecvbuf}_{10} + \Var{pRecvbuf}_{11} \\
+\textit{Assign}_5 \definedby \
+& \Var{status} := \Var{pRecvbuf}_{16} \\
+\textit{Assign}_6 \definedby \
+& \Var{gf} := \Var{wt0}' \cdot \Var{dtime}
+\end{align*}
+
+\end{description}
+
+\end{document}

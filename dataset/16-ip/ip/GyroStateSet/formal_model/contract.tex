@@ -1,0 +1,87 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{GyroStateSet}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]:
+\Var{powerState},
+\Var{healthState},
+$\Var{StateFlag}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{powerState} \mapsto \Var{powerState} : \mathbb{N}$
+\item $\var{healthState} \mapsto \Var{healthState} : \mathbb{N}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{StateFlag} \mapsto \Var{StateFlag} : \mathbb{N}\rightharpoonup\mathbb{N}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]: None
+
+\item[Clocks]:
+$\clock, \clock' : \mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]: \textbf{True}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \\
+Check_1 \definedby \
+& \clock'=\clock \\
+Check_2 \definedby \
+& \forall 0 \leq i < 9 \cdot
+\left(
+\begin{aligned}
+& \syntax{if } \Var{powerState} \% 2^{i+1} \geq 2^i  \ \wedge \ \Var{healthState} \% 2^{i+1} < 2^i \syntax{ then} \\
+& \quad \Var{StateFlag}'[i] = \texttt{0xEB} \\
+& \syntax{else} \\
+& \quad \Var{StateFlag}'[i] = \texttt{0x00} \\
+& \syntax{endif}
+\end{aligned}
+\right)
+\end{align*}
+
+\end{description}
+
+\end{document}

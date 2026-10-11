@@ -1,0 +1,208 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{ModeSwitch}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]:
+\var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \\
+$\Var{pGyroRate},
+\Var{flgSP},
+\Var{royaw},
+\Var{piyaw},
+\Var{m\_workMode},
+\Var{m\_workMode}',
+\Var{m\_countMode},
+\Var{m\_countMode}', \\
+\Var{m\_countPublic},
+\Var{m\_countPublic}',
+\Var{time\_D2P},
+\Var{time\_D2P\_overtime},
+\clock,
+\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{pGyroRate} \mapsto \Var{pGyroRate} : \mathbb{R^*}$
+\item $\var{flgSP} \mapsto \Var{flgSP} : \mathbb{R}$
+\item $\var{royaw} \mapsto \Var{royaw} : \mathbb{R}$
+\item $\var{piyaw} \mapsto \Var{piyaw} : \mathbb{R}$
+\end{itemize}
+
+\item[Outputs]: None
+
+\item[In-Outputs]:
+\begin{itemize}
+\item $\var{m\_workMode} \mapsto \Var{m\_workMode} : \mathbb{N}$
+\end{itemize}
+
+\item[States]:
+\begin{itemize}
+\item $\var{m\_countMode} \mapsto \Var{m\_countMode} : \mathbb{N}$
+\item $\var{m\_countPublic} \mapsto \Var{m\_countPublic} : \mathbb{N}$
+\end{itemize}
+
+\item[Parameters]: 
+\begin{itemize}
+\item $\var{time\_D2P} \mapsto \Var{time\_D2P} : \mathbb{N}$
+\item $\var{time\_D2P\_overtime} \mapsto \Var{time\_D2P\_overtime} : \mathbb{N}$
+\end{itemize}
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]: \text{True}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& \exists \ \Var{countMode} = \Var{m\_countMode} + 1 \cdot \big{(} Case_1 \vee Case_2\vee Case_3 \vee Other \big{)}
+\end{align*}
+
+\begin{align*}
+Case_1 \definedby \
+& (\Var{m\_workMode} = 0) \wedge DAMP \\
+DAMP \definedby \
+& \syntax{if } \syntax{max}(\Var{pGyroRate[0]}, \Var{pGyroRate[1]}, \Var{pGyroRate[2]}) < 0.15 \syntax{ then} \\
+& \quad \syntax {if } \Var{m\_countPublic} + 1 > \Var{time\_D2P} \ \vee \ \Var{countMode} > \Var{time\_D2P\_overtime} \syntax{ then} \\
+& \quad \quad \Var{m\_workMode}' = 17 \\
+& \quad \quad \wedge \Var{m\_countMode}' = 0 \\
+& \quad \quad \wedge \Var{m\_countPublic}' = 0 \\
+& \quad \syntax{else} \\
+& \quad \quad \Var{m\_workMode}' = \Var{m\_workMode} \\
+& \quad \quad \wedge \Var{m\_countMode}' = \Var{countMode} \\
+& \quad \quad \wedge \Var{m\_countPublic}' = \Var{m\_countPublic} + 1 \\
+& \quad \syntax{endif} \\
+& \syntax{else if } \Var{m\_countPublic} >\Var{time\_D2P} \ \vee \ \Var{countMode} > \Var{time\_D2P\_overtime} \syntax{ then} \\
+& \quad \quad \Var{m\_workMode}' = 17 \\
+& \quad \quad \wedge \Var{m\_countMode}' = 0 \\
+& \quad \quad \wedge \Var{m\_countPublic}' = 0 \\
+& \quad \syntax{else} \\
+& \quad \quad \Var{m\_workMode}' = \Var{m\_workMode} \\
+& \quad \quad \wedge \Var{m\_countMode}' = \Var{countMode} \\
+& \quad \quad \wedge \Var{m\_countPublic}' = \Var{m\_countPublic} \\
+& \quad \syntax{endif}\\
+&\syntax{endif}
+\end{align*}
+
+\begin{align*}
+Case_2 \definedby \
+& (\Var{m\_workMode} = 17) \wedge PITCH \\
+PITCH \definedby \
+& \exists \ \Var{workMode\_temp}, \Var{countMode\_temp}, \Var{countPublic\_temp} \cdot ( PITCH_1 \wedge PITCH_2 ) \\
+PITCH_1 \definedby \
+& \syntax{if } \Var{flgSP} = 235 \syntax{ then} \\
+& \quad \syntax{if } |\Var{piyaw}| > 0.25 \syntax{ then} \\
+& \quad \quad \syntax{if } (\Var{m\_countPublic} > 11) \syntax{ then} \\
+& \quad \quad \quad \Var{workMode\_temp} = 51 \\
+& \quad \quad \quad \wedge \Var{countMode\_temp} = 0 \\
+& \quad \quad \quad \wedge \Var{countPublic\_temp} = 0 \\
+& \quad \quad \syntax{else} \\
+& \quad \quad \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \quad \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \quad \quad \wedge \Var{countPublic\_temp} = \Var{m\_countPublic} + 1 \\
+& \quad \quad \syntax{endif} \\
+& \quad \syntax{else} \\
+& \quad \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \quad \wedge \Var{countPublic\_temp} = \Var{m\_countPublic} \\
+& \quad \syntax{endif} \\
+& \syntax{else} \\
+& \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \wedge \Var{countPublic\_temp} = 0 \\
+& \syntax{endif} \\
+PITCH_2 \definedby \
+& \syntax{if } \Var{countMode\_temp} > 4500 \syntax{ then} \\
+& \quad \Var{m\_workMode}' = 34 \\
+& \quad \wedge \Var{m\_countMode}' = 0 \\
+& \quad \wedge \Var{m\_countPublic}' = 0 \\
+& \syntax{else} \\
+& \quad \Var{m\_workMode}' = \Var{workMode\_temp} \\
+& \quad \wedge \Var{m\_countMode}' = \Var{countMode\_temp} \\
+& \quad \wedge \Var{m\_countPublic}' = \Var{countPublic\_temp} \\
+& \syntax{endif}
+\end{align*}
+
+\begin{align*}
+Case_3 \definedby \
+& (\Var{m\_workMode} = 34) \wedge ROLL \\
+ROLL \definedby \
+& \exists \ \Var{workMode\_temp}, \Var{countMode\_temp}, \Var{countPublic\_temp} \cdot ( ROLL_1 \wedge ROLL_2 ) \\
+ROLL_1 \definedby \
+& \syntax{if } \Var{flgSP} = 235 \syntax{ then} \\
+& \quad \syntax{if } |\Var{royaw}| > 1 \syntax{ then} \\
+& \quad \quad \syntax{if } \Var{m\_countPublic} > 11 \syntax{ then} \\
+& \quad \quad \quad \Var{workMode\_temp} = 51 \\
+& \quad \quad \quad \wedge \Var{countMode\_temp} = 0 \\
+& \quad \quad \quad \wedge \Var{countPublic\_temp} = 0 \\
+& \quad \quad \syntax{else} \\
+& \quad \quad \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \quad \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \quad \quad \wedge \Var{countPublic\_temp} = \Var{m\_countPublic} + 1 \\
+& \quad \quad \syntax{endif} \\
+& \quad \syntax{else} \\
+& \quad \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \quad \wedge \Var{countPublic\_temp} = \Var{m\_countPublic} \\
+& \quad \syntax{endif} \\
+& \syntax{else} \\
+& \quad \Var{workMode\_temp} = \Var{m\_workMode} \\
+& \quad \wedge \Var{countMode\_temp} = \Var{countMode} \\
+& \quad \wedge \Var{countPublic\_temp} = 0 \\
+& \syntax{endif} \\
+ROLL_2 \definedby \
+& \syntax{if } \Var{countMode\_temp} > 5000 \syntax{ then} \\
+& \quad \Var{m\_workMode}' = 34 \\
+& \quad \wedge \Var{m\_countMode}' = 0 \\
+& \quad \wedge \Var{m\_countPublic}' = 0 \\
+& \syntax{else} \\
+& \quad \Var{m\_workMode}' = \Var{workMode\_temp} \\
+& \quad \wedge \Var{m\_countMode}' = \Var{countMode\_temp} \\
+& \quad \wedge \Var{m\_countPublic}' = \Var{countPublic\_temp} \\
+& \syntax{endif}
+\end{align*}
+
+\begin{align*}
+Other \definedby \
+& \Var{m\_workMode} \neq 0 \\
+& \wedge \Var{m\_workMode} \neq 17 \\
+& \wedge \Var{m\_workMode} \neq 34 \\
+& \wedge \Var{m\_workMode}' = \Var{m\_workMode} \\
+& \wedge \Var{m\_countMode}' = \Var{countMode} \\
+& \wedge \Var{m\_countPublic}' = \Var{m\_countPublic}
+\end{align*}
+
+\end{description}
+
+\end{document}

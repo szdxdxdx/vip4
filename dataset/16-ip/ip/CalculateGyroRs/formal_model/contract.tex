@@ -1,0 +1,130 @@
+\documentclass[fleqn,a4paper]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, scale=0.8}
+
+\usepackage{color}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage[colorlinks,linkcolor=cyan]{hyperref}
+\usepackage{stmaryrd}
+\newcommand\process[1]{\textcolor[RGB]{22,102,202}{\textsf{\textup{#1}}}}
+\newcommand\var[1]{\texttt{#1}}
+\newcommand\Var[1]{\textcolor{blue}{\textsf{#1}}}
+\newcommand\syntax[1]{\textcolor[RGB]{202,12,22}{\textsf{#1}}}
+\newcommand\clock{\textcolor{red}{\textsf{clock}}}
+\newcommand\definedby{\triangleq}
+
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{CalculateGyroRs}}
+\author{}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]: \var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \\
+\Var{JoinTotal},
+\Var{gyroStatus0},
+\Var{SignFlag},
+$\Var{flgGryoCalc}'$,
+$\Var{Rtemp}'$, \\
+\Var{gyroStatus1},
+$\Var{gyroStatus1}'$,
+\Var{VG},
+$\Var{VG}'$,
+\clock,
+$\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{JoinTotal} \mapsto \Var{JoinTotal} : \mathbb{N}$
+\item $\var{gyroStatus0} \mapsto \Var{gyroStatus0} : \mathbb{N}$
+\item $\var{SignFlag} \mapsto \Var{SignFlag} : \mathbb{N} \rightharpoonup \mathbb{N}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{flgGryoCalc} \mapsto \Var{flgGryoCalc} : \mathbb{N}$
+\item $\var{Rtemp} \mapsto \Var{Rtemp}:(\mathbb{N},\mathbb{N}) \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: 
+\begin{itemize}
+\item $\var{gyroStatus1} \mapsto \Var{gyroStatus1} : \mathbb{N}$
+\end{itemize}
+
+\item[Parameters]:
+\begin{itemize}
+\item $\var{VG} \mapsto \Var{VG}:(\mathbb{N},\mathbb{N}) \rightharpoonup \mathbb{R}$
+\end{itemize}
+
+\item[Clocks]:
+$\clock,\clock':\mathbb{R}_{\geq 0}$
+
+\end{description}
+
+\newpage
+
+\section{AG Contract}
+
+\begin{description}
+
+\item[Assumptions]:
+\begin{align*}
+Assumptions \definedby \
+& \syntax{size}(\Var{VG}) = (9,3) \\
+& \wedge \syntax{len}(\Var{SignFlag}) \geq \min\{\Var{JoinTotal},5\} \\
+& \wedge \forall 0 \leq j < \min\{\Var{JoinTotal},5\} \cdot \Var{SignFlag}[j] < 9
+\end{align*}
+
+\item[Guarantees]:
+\begin{align*}
+Guarantees \definedby \
+& Check_1 \wedge Check_2 \\
+Check_1 \definedby \
+& \syntax{size}(\Var{Rtemp}') = (3,5) \\
+& \wedge \syntax{size}(\Var{VG}') = (3,5) \\
+& \wedge \Var{VG}' = \Var{VG} \\
+& \wedge \clock' = \clock \\
+Check_2 \definedby \
+& \syntax{if }\Var{gyroStatus0}\neq\Var{gyroStatus1}\syntax{ then} \\
+& \qquad \Var{flgGryoCalc}' = \texttt{0xEB} \\
+& \qquad \wedge \Var{gyroStatus1}' = \Var{gyroStatus0} \\
+& \qquad \wedge Check_3 \\
+& \syntax{else} \\
+& \qquad \Var{flgGryoCalc}' = 0 \\
+& \qquad \wedge \forall 0 \leq i < 3 \cdot \forall 0 \leq j < 5 \cdot \Var{Rtemp}'[i,j] = 0 \\
+& \qquad \wedge\Var{gyroStatus1}' = \Var{gyroStatus1} \\
+& \syntax{endif} \\
+Check_3 \definedby \
+& \exists \Var{Rgtemp} : (\mathbb{N},\mathbb{N}) \rightharpoonup \mathbb{R} \cdot
+\big{(} \
+\syntax{size}(\Var{Rgtemp}) = (5,3)
+\wedge Check_4 \wedge Check_5 \wedge Check_6 \
+\big{)}\\
+Check_4 \definedby \
+& \forall 0 \leq i < \min\{\Var{JoinTotal},5\} \cdot \forall 0 \leq j < 3 \cdot
+  \Var{Rgtemp}[i,j] = \Var{VG}[\Var{SignFlag}[i]][j] \\
+Check_5 \definedby \
+& \forall \min\{\Var{JoinTotal},5\} \leq i < 5 \cdot \forall 0 \leq j < 3 \cdot \Var{Rgtemp}[i,j] = 0 \\
+Check_6 \definedby \
+& \syntax{if }
+  \min\{\Var{JoinTotal},5\} \geq 3 \wedge \textcolor{red}{\syntax{rank}(\Var{Rgtemp}^\top \bullet \Var{Rgtemp}) = 3}
+  \syntax{ then} \\
+& \qquad \Var{Rtemp}' = (\Var{Rgtemp}^\top \bullet \Var{Rgtemp})^{-1} \bullet \Var{Rgtemp}^\top \\
+& \syntax{else} \\
+& \qquad \forall 0 \leq i < 3 \cdot \forall 0 \leq j < 5 \cdot \Var{Rtemp}'[i,j] = 0 \\
+& \syntax{endif}
+\end{align*}
+
+\end{description}
+ 
+\end{document}
