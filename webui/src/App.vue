@@ -7,22 +7,31 @@ const sending = ref(false)
 const reply = ref('')
 
 async function send() {
-  if (!taskId.value.trim() || !text.value.trim() || sending.value) return
+  const id = taskId.value.trim()
+  if (!id || !text.value.trim() || sending.value) return
   sending.value = true
   reply.value = ''
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
-    const response = await fetch('/task', {
+    const response = await fetch('/task/create_task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId.value.trim(), prompt: text.value }),
+      body: JSON.stringify({ task_id: id, prompt: text.value }),
     })
     if (!response.ok) {
       const data = await response.json()
       throw new Error(typeof data.detail === 'string' ? data.detail : '请检查任务 ID 和提示词')
     }
-    if (!response.body) throw new Error('发送失败')
-    reader = response.body.getReader()
+    await response.json()
+    const events = await fetch(`/task/get_events?task_id=${encodeURIComponent(id)}`, {
+      headers: { Accept: 'application/x-ndjson' },
+    })
+    if (!events.ok) {
+      const data = await events.json()
+      throw new Error(typeof data.detail === 'string' ? data.detail : '读取回复失败，请重试')
+    }
+    if (!events.body) throw new Error('读取回复失败，请重试')
+    reader = events.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
     let settled = false
@@ -31,8 +40,11 @@ async function send() {
       buffer += decoder.decode(value, { stream: !done })
       let newline: number
       while ((newline = buffer.indexOf('\n')) !== -1) {
-        const event = JSON.parse(buffer.slice(0, newline))
+        const taskEvent = JSON.parse(buffer.slice(0, newline))
         buffer = buffer.slice(newline + 1)
+        if (taskEvent.type === 'error') throw new Error(taskEvent.error)
+        if (taskEvent.type !== 'agent') continue
+        const event = taskEvent.data
         if (event.type === 'error') throw new Error(event.error)
         if (event.type === 'message_start' && event.message.role === 'assistant') reply.value = ''
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {

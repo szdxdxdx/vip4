@@ -1,11 +1,8 @@
-import json
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import config
-from ..agent.stream import agent_response
+from .service import TaskExistsError, TaskNotFoundError
 
 router = APIRouter()
 
@@ -15,32 +12,22 @@ class TaskRequest(BaseModel):
     prompt: str = Field(min_length=1, pattern=r"\S")
 
 
-
-@router.post("/task")
-async def task(body: TaskRequest):
-    config.VIP_TASK_DIR.mkdir(parents=True, exist_ok=True)
-
-    task_dir = config.VIP_TASK_DIR / body.task_id
+@router.post('/task/create_task', status_code=201)
+async def create_task(body: TaskRequest, request: Request):
     try:
-        task_dir.mkdir()
-    except FileExistsError:
-        raise HTTPException(status_code=409, detail="task_id 已存在，请使用新的任务 ID") from None
+        return request.app.state.task_manager.create_task(body.task_id, body.prompt)
+    except TaskExistsError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
 
-    session_dir = task_dir / "session"
-    workspace = task_dir / "workspace"
-    for directory in (session_dir, workspace):
-        directory.mkdir()
 
-    metadata = {
-        "task_id": body.task_id,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    (task_dir / "task.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-    )
-    (task_dir / ".gitignore").write_text(
-        "*\n", encoding="utf-8",
-    )
-
-    prompt = f"本轮对话的工作目录为 {workspace}，任务输出请放在该目录中。\n\n{body.prompt}"
-    return agent_response(prompt, cwd=workspace, session_dir=session_dir)
+@router.get('/task/get_events')
+async def get_events(request: Request, task_id: str = Query(
+    max_length=64, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$',
+)):
+    try:
+        events = request.app.state.task_manager.get_events(task_id)
+    except TaskNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    return StreamingResponse(events, media_type='application/x-ndjson', headers={
+        'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no',
+    })
