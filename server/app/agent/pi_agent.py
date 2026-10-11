@@ -5,7 +5,7 @@ from threading import Lock
 
 import anyio
 
-import config
+from .. import config
 
 
 class PiAgent:

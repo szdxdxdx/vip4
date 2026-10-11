@@ -1,22 +1,27 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+const taskId = ref('')
 const text = ref('')
 const sending = ref(false)
 const reply = ref('')
 
 async function send() {
-  if (!text.value.trim() || sending.value) return
+  if (!taskId.value.trim() || !text.value.trim() || sending.value) return
   sending.value = true
   reply.value = ''
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
-    const response = await fetch('/talk', {
+    const response = await fetch('/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text.value }),
+      body: JSON.stringify({ task_id: taskId.value.trim(), prompt: text.value }),
     })
-    if (!response.ok || !response.body) throw new Error('发送失败')
+    if (!response.ok) {
+      const data = await response.json()
+      throw new Error(typeof data.detail === 'string' ? data.detail : '请检查任务 ID 和提示词')
+    }
+    if (!response.body) throw new Error('发送失败')
     reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -56,8 +61,9 @@ async function send() {
 
 <template>
   <form @submit.prevent="send">
+    <input v-model="taskId" aria-label="任务 ID" placeholder="task_id" pattern="[a-zA-Z0-9][a-zA-Z0-9_-]*" maxlength="64" required :disabled="sending" />
     <textarea v-model="text" aria-label="对话内容" placeholder="输入对话内容" :disabled="sending" />
-    <button type="submit" :disabled="sending || !text.trim()">{{ sending ? '发送中…' : '发送' }}</button>
+    <button type="submit" :disabled="sending || !taskId.trim() || !text.trim()">{{ sending ? '发送中…' : '发送' }}</button>
   </form>
   <p style="white-space: pre-wrap">{{ reply }}</p>
 </template>
