@@ -45,7 +45,7 @@ class TaskManager:
         (task_dir / '.gitignore').write_text('*\n', encoding='utf-8')
         (task_dir / 'events.jsonl').touch()
 
-        agent_prompt = f'本轮对话的工作目录为 {workspace}，任务输出请放在该目录中。\n\n{prompt}'
+        agent_prompt = f'/skill:verify-ip 工作目录为 {workspace}\n\n{prompt}'
         job = asyncio.create_task(self._run(task_dir, agent_prompt))
         self.jobs[task_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(task_id, None))
@@ -88,6 +88,18 @@ class TaskManager:
                         write({'type': 'agent', 'data': event})
                         if event.get('type') == 'error':
                             status = 'failed'
+                if status == 'completed':
+                    reports = []
+                    workspace = task_dir / 'workspace'
+                    for report in workspace.glob('*_suite/output/report.json'):
+                        html = report.with_suffix('.html')
+                        if html.is_file() and html.stat().st_size:
+                            json.loads(report.read_text(encoding='utf-8'))
+                            reports.append(str(report.relative_to(workspace)))
+                    if not reports:
+                        status = 'failed'
+                        write({'type': 'error', 'error': 'Agent 已停止，但未生成最终验证报告，任务未完成'})
+                    metadata['reports'] = reports
             except asyncio.CancelledError:
                 status = 'cancelled'
                 write({'type': 'error', 'error': '服务关闭，任务已取消'})

@@ -5,7 +5,7 @@ from .. import config
 from .pi_agent import PiAgent
 
 
-async def agent_events(prompt: str, cwd: Path | None = None, session_dir: Path | None = None):
+async def agent_events(prompt: str, cwd: Path, session_dir: Path):
     try:
         async with PiAgent(cwd=cwd, session_dir=session_dir) as agent, asyncio.timeout(config.PI_TIMEOUT):
             await asyncio.to_thread(agent.send_prompt, prompt)
