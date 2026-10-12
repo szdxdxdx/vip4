@@ -14,6 +14,3 @@ PORT = 8414
 PI_TOOLS = 'read,bash,edit,write,grep,find,ls'
 PI_TIMEOUT = None
 PI_CLOSE_TIMEOUT = 5
-
-# TODO 整个项目的全局配置放在这里
-# 各个模块内的配置应该另建 config.py

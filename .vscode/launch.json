@@ -11,6 +11,40 @@
       "cwd": "${workspaceFolder}/server",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "VIP4 backend only",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/server/.venv/bin/python",
+      "module": "main",
+      "args": [
+        "--backend-only"
+      ],
+      "cwd": "${workspaceFolder}/server",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "VIP4 frontend only",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "cwd": "${workspaceFolder}/webui",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     }
   ]
 }

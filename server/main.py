@@ -20,10 +20,11 @@ async def lifespan(app: FastAPI):
         await app.state.task_manager.close()
 
 
-def create_app() -> FastAPI:
+def create_app(backend_only: bool = False) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(task_router)
-    app.mount("/", StaticFiles(directory=config.VIP_WEBUI_DIST_DIR, html=True))
+    if not backend_only:
+        app.mount("/", StaticFiles(directory=config.VIP_WEBUI_DIST_DIR, html=True))
     return app
 
 
@@ -31,6 +32,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default=config.HOST)
     parser.add_argument('--port', type=int, default=config.PORT)
+    parser.add_argument('--backend-only', action='store_true')
     args = parser.parse_args()
-    app = create_app()
+    app = create_app(backend_only=args.backend_only)
     uvicorn.run(app, host=args.host, port=args.port)

@@ -2,13 +2,21 @@
 
 Vue 3 + TypeScript，无路由、无额外 UI 依赖。仅使用 `/task` API。
 
+工作台采用直角、灰白底与清晰边线，以克制的蓝灰色强调交互，保留状态色；独立报告预览不受工作台样式影响。
+
 ```sh
 npm run dev    # Vite 默认本机监听；/task 开发代理到 127.0.0.1:8414
 npm run build  # vue-tsc + Vite
 npm test       # 无浏览器测试，所有 HTTP 请求均使用 mock，不调用 LLM
 ```
 
-生产部署须由同源服务将 `/task` 转发到后端；Vite proxy 仅在开发时生效。
+## 运行方式
+
+- 默认模式：在 `server/` 执行 `uv run python -m main`，后端同时托管 `webui/dist`，需先运行 `npm run build`。
+- 分离开发：在 `server/` 执行 `uv run python -m main --backend-only`；在 `webui/` 执行 `npm run dev -- --host 127.0.0.1 --port 5173 --strictPort`。浏览器访问 `http://127.0.0.1:5173`，`/task` 由 Vite 代理到后端 `127.0.0.1:8414`。仅后端模式不依赖前端构建目录。
+- VS Code 启动配置：`VIP4 server` 为默认模式；`VIP4 backend only` 仅启动后端；`VIP4 frontend (Vite)` 单独启动前端开发服务。分离开发时分别启动后两项。
+
+Vite proxy 仅在开发时生效。若生产环境也分离部署，须由同源服务将 `/task` 转发到后端。
 
 ## 结构
 
