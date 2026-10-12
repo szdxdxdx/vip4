@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-import config
+from app.service import config
 from app.service.api import router as task_router
 from app.vip_task.task_manager import TaskManager
 

@@ -6,6 +6,8 @@ from threading import Lock
 
 import anyio
 
+from . import config
+
 
 class PiAgent:
     def __init__(
@@ -13,14 +15,14 @@ class PiAgent:
         cwd: str | Path,
         session_dir: str | Path | None = None,
         *,
-        argv: Sequence[str] = ('pi', '--mode', 'rpc'),
+        argv: Sequence[str] | None = None,
         env: dict[str, str] | None = None,
-        close_timeout: float | None = 5,
+        close_timeout: float | None = config.PI_CLOSE_TIMEOUT,
     ):
         self.cwd = Path(cwd)
         self.session_dir = Path(session_dir) if session_dir is not None else None
         self.close_timeout = close_timeout
-        command = list(argv)
+        command = list(argv) if argv is not None else [config.PI_EXECUTABLE, '--mode', 'rpc']
         if self.session_dir is not None:
             command.extend(['--session-dir', str(self.session_dir)])
         self.process = subprocess.Popen(

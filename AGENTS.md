@@ -41,14 +41,10 @@ AI Agent 依照 SKILL 的指导，调用 MCP 提供的工具，完成软件 IP �
 server/   # 后端项目代码
 |   app/
 |   |   agent/
-|   |   |   pi.py
 |   |   vip_task/
-|   |   |   task_manager/
-|   |   |   task/
 |   |   service/
 |   |   |   api.py
 |   main.py
-|   config.py
 skills/   # 用于【软件 IP 验证】的 SKILL
 tasks/    # 【软件 IP 验证】任务的工作目录
 webui/    # 前端项目代码

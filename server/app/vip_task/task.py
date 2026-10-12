@@ -10,7 +10,8 @@ from contextlib import aclosing
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
+from . import config
+from ..agent import config as agent_config
 from ..agent.pi import PiAgent
 from .pi_session import read_history
 
@@ -52,8 +53,6 @@ class WorkspaceFile:
 
 
 TASK_ID_PATTERN = r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$'
-MAX_SCAN_ENTRIES = 20000
-MAX_WORKSPACE_FILES = 5000
 
 
 def _write_metadata(path: Path, metadata: dict):
@@ -240,7 +239,7 @@ class Task:
                 with os.scandir(directory) as entries:
                     for entry in entries:
                         scanned += 1
-                        if scanned > MAX_SCAN_ENTRIES:
+                        if scanned > config.MAX_SCAN_ENTRIES:
                             raise TaskReadLimitError('workspace 文件数量超过扫描上限')
                         if entry.name.startswith('.') or entry.name in ('tmp', '__pycache__'):
                             continue
@@ -255,7 +254,7 @@ class Task:
                                 file = self._workspace_file(workspace, relative)
                                 files.append({'path': relative, 'size': file.path.stat().st_size,
                                               'kind': file.kind})
-                                if len(files) > MAX_WORKSPACE_FILES:
+                                if len(files) > config.MAX_WORKSPACE_FILES:
                                     raise TaskReadLimitError('workspace 文件数量超过返回上限')
                         except (FileNotFoundError, TaskNotFoundError, TaskPathError):
                             continue
@@ -295,7 +294,7 @@ class Task:
                 elif self.job is None or self.job.done():
                     return
                 else:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(config.EVENT_POLL_INTERVAL)
 
         return stream()
 
@@ -318,7 +317,7 @@ class Task:
 
         return PiAgent(
             argv=[
-                'pi',
+                agent_config.PI_EXECUTABLE,
                 '--mode', 'rpc',
                 '--tools', config.PI_TOOLS,
                 '--no-extensions',
@@ -341,7 +340,6 @@ class Task:
             ],
             cwd=cwd,
             session_dir=session_dir,
-            close_timeout=config.PI_CLOSE_TIMEOUT,
             env={
                 **os.environ,
                 'TMPDIR': str(tmp_dir), 'TMP': str(tmp_dir), 'TEMP': str(tmp_dir),

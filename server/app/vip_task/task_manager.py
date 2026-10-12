@@ -2,7 +2,7 @@ import asyncio
 import re
 from datetime import datetime, timezone
 
-import config
+from . import config
 from .task import (
     Task, TaskDeletingError, TaskNotFoundError, TaskPathError, TaskMetadataError, TASK_ID_PATTERN,
 )
