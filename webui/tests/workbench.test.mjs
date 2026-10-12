@@ -4,13 +4,14 @@ import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
-import { createRenderer, nextTick } from 'vue'
+import { createRenderer, nextTick, reactive } from 'vue'
+import { parse, compileScript } from '@vue/compiler-sfc'
 
 // Compile the actual TS modules to a disposable directory, no testing dependency needed.
 const root = resolve(import.meta.dirname, '..')
 await mkdir(resolve(root, 'node_modules/.tmp'), { recursive: true })
 const out = await mkdtemp(resolve(root, 'node_modules/.tmp/workbench-test-'))
-for (const file of ['types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts']) {
+for (const file of ['types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts', 'templates/attical.ts']) {
   const source = await readFile(resolve(root, 'src', file), 'utf8')
   let code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
   code = code.replace(/from '(\.[^']+)'/g, "from '$1.js'")
@@ -18,6 +19,19 @@ for (const file of ['types.ts', 'api.ts', 'composables/eventReducer.ts', 'compos
   await mkdir(dirname(destination), { recursive: true })
   await writeFile(destination, code)
 }
+// 编译真实组件，用 Vue 内存渲染器检查视图切换，无浏览器依赖。
+for (const file of ['App.vue', ...['TaskSidebar', 'ConversationPanel', 'MessageItem', 'TaskComposer', 'ArtifactPanel', 'ProgressPanel'].map(name => `components/${name}.vue`)]) {
+  const source = await readFile(resolve(root, 'src', file), 'utf8')
+  const { descriptor } = parse(source)
+  const script = compileScript(descriptor, { id: file, inlineTemplate: true })
+  let code = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
+  code = code.replace(/from (['"])(\.[^'"]+)\1/g, (_, quote, path) => `from ${quote}${path.replace(/\.vue$/, '')}.js${quote}`)
+  const destination = resolve(out, file.replace(/\.vue$/, '.js'))
+  await mkdir(dirname(destination), { recursive: true })
+  await writeFile(destination, code)
+}
+const { default: ProgressPanel } = await import(pathToFileURL(resolve(out, 'components/ProgressPanel.js')))
+const { default: App } = await import(pathToFileURL(resolve(out, 'App.js')))
 const { applyTaskEvent, initialConversation } = await import(pathToFileURL(resolve(out, 'composables/eventReducer.js')))
 const api = await import(pathToFileURL(resolve(out, 'api.js')))
 const { useWorkbench } = await import(pathToFileURL(resolve(out, 'composables/useWorkbench.js')))
@@ -95,10 +109,28 @@ test('API paths are encoded, create body matches contract, HTTP detail is surfac
   await assert.rejects(api.streamTask('x', new AbortController().signal, () => {}), /事件流解析失败/)
 })
 
+const elements = []
 const renderer = createRenderer({
-  createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
-  insert() {}, remove() {}, setText() {}, setElementText() {}, parentNode: () => null,
-  nextSibling: () => null, patchProp() {},
+  createElement: tag => {
+    const el = { tag, tagName: tag.toUpperCase(), style: {}, props: {}, text: '', children: [],
+      options: [], close() {}, showModal() {}, addEventListener() {}, removeEventListener() {} }
+    elements.push(el)
+    return el
+  },
+  createText: text => ({ text }), createComment: text => ({ text }),
+  insert(el, parent, anchor = null) {
+    if (el.parent) el.parent.children.splice(el.parent.children.indexOf(el), 1)
+    parent.children ||= []
+    const index = anchor ? parent.children.indexOf(anchor) : -1
+    parent.children.splice(index < 0 ? parent.children.length : index, 0, el)
+    el.parent = parent
+  },
+  remove(el) { if (el.parent) el.parent.children.splice(el.parent.children.indexOf(el), 1); el.parent = null },
+  setText(el, text) { el.text = text },
+  setElementText(el, text) { el.text = text; el.children = [] },
+  parentNode: el => el.parent,
+  nextSibling: el => el.parent?.children[el.parent.children.indexOf(el) + 1] || null,
+  patchProp(el, key, prev, next) { el.props[key] = next },
 })
 function mountedWorkbench() {
   let workbench
@@ -169,4 +201,118 @@ test('components preserve sandbox and pure text rendering', async () => {
   assert.match(artifacts, /closeReport\(\); selectedReport\.value = ''/)
   assert.doesNotMatch(artifacts, /allow-same-origin/)
   assert.doesNotMatch(message, /v-html/)
+})
+
+test('视图切换保留对话实例与实时订阅，切任务返回对话', async () => {
+  elements.length = 0
+  const streams = new Map()
+  let eventReads = 0
+  let detailReads = 0
+  const task = id => ({ task_id: id, prompt: `prompt-${id}`, status: 'running', created_at: '' })
+  globalThis.fetch = async (url, options) => {
+    if (url === '/task/list_tasks') return response({ tasks: [task('A'), task('B')] })
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/get_task')) {
+      detailReads++
+      return response({ task: task(id), files: [{ path: 'report.html', kind: 'report_html', size: 10 }] })
+    }
+    eventReads++
+    return new Response(new ReadableStream({ start(c) { streams.set(id, { c, signal: options.signal }) } }))
+  }
+  const app = renderer.createApp(App)
+  app.mount({})
+  const control = label => elements.find(el => el.tag === 'button' && el.text === label && el.props['aria-controls'] === 'main-view')
+  const click = async label => { control(label).props.onClick(); await nextTick() }
+  try {
+    await waitFor(() => streams.has('A'))
+    const conversation = elements.find(el => el.props['aria-label'] === '任务会话')
+    for (const view of ['进度预览', '验证结果报告', '文件下载', '对话']) {
+      await click(view)
+      assert.equal(eventReads, 1)
+      assert.equal(detailReads, 1)
+      assert.equal(streams.get('A').signal.aborted, false)
+      assert.equal(conversation.style.display, view === '对话' ? undefined : 'none')
+    }
+    assert.equal(elements.filter(el => el.props['aria-label'] === '任务会话').length, 1)
+    const scroll = elements.find(el => el.props.class === 'message-scroll')
+    Object.assign(scroll, { scrollTop: 120, scrollHeight: 1000, clientHeight: 300 })
+    scroll.props.onScrollPassive()
+    await click('进度预览')
+    const send = data => streams.get('A').c.enqueue(new TextEncoder().encode(JSON.stringify(rpc(data)) + '\n'))
+    send({ type: 'tool_execution_start', toolCallId: 'live-tool', toolName: 'bash' })
+    await waitFor(() => elements.some(el => el.text === 'live-tool'))
+    send({ type: 'tool_execution_end', toolCallId: 'live-tool', isError: true, result: 'failed' })
+    await waitFor(() => elements.some(el => el.tag === 'span' && el.text === '失败'))
+    await click('对话')
+    assert.equal(eventReads, 1)
+    assert.equal(conversation.style.display, undefined)
+    assert.equal(scroll.scrollTop, 120)
+    await click('文件下载')
+    // 任务卡的 ID 在子节点内，选择未选中的卡片。
+    const taskB = elements.find(el => el.tag === 'button' && el.props.class?.includes('task-card') && el.props['aria-current'] !== 'true')
+    taskB.props.onClick()
+    await waitFor(() => streams.has('B'))
+    await nextTick()
+    assert.equal(control('对话').props['aria-pressed'], true)
+    assert.equal(conversation.style.display, undefined)
+    assert.equal(streams.get('A').signal.aborted, true)
+    assert.equal(eventReads, 2)
+  } finally {
+    app.unmount()
+    for (const { c } of streams.values()) c.close()
+  }
+})
+
+test('布局约束：精简顶栏与任务卡、右侧表单和按钮、中间产物', async () => {
+  const source = async path => readFile(resolve(root, 'src', path), 'utf8')
+  const app = await source('App.vue')
+  const sidebar = await source('components/TaskSidebar.vue')
+  const composer = await source('components/TaskComposer.vue')
+  const progress = await source('components/ProgressPanel.vue')
+  const css = await source('style.css')
+  assert.match(app, /<header class="app-header"><h1>软件IP验证<\/h1><\/header>/)
+  assert.doesNotMatch(app, /brand-mark|WORKSPACE|Agent 验证工作台/)
+  assert.doesNotMatch(sidebar, /item\.prompt|created_at|<time|无提示词|TASKS|sidebar-foot/)
+  assert.match(sidebar, /item\.task_id/)
+  assert.match(sidebar, /statusLabel\(item.status\)/)
+  const center = app.slice(app.indexOf('id="main-view"'), app.indexOf('<aside class="panel task-controls"'))
+  const right = app.slice(app.indexOf('<aside class="panel task-controls"'))
+  assert.match(center, /<ArtifactPanel/)
+  assert.match(center, /v-show="activeView === 'conversation'"/)
+  assert.doesNotMatch(center, /<TaskComposer/)
+  assert.match(right, /<TaskComposer[\s\S]*<nav class="view-controls"/)
+  assert.doesNotMatch(right, /<ArtifactPanel/)
+  assert.match(app, /@click="activeView = view.id"/)
+  assert.match(app, /watch\(selectedId,[\s\S]*activeView.value = 'conversation'/)
+  assert.match(composer, /prompt = atticalPrompt/)
+  assert.match(css, /grid-template-columns:220px minmax\(0,1fr\) 340px/)
+  assert.match(css, /\.task-row strong \{[^}]*min-width:0;[^}]*overflow-wrap:anywhere/)
+  assert.doesNotMatch(css, /\.brand|\.eyebrow|\.tabs|\.sidebar-foot|box-shadow|linear-gradient/)
+  assert.match(progress, /props.messages.filter\(message => message.kind === 'tool'\)/)
+  assert.doesNotMatch(progress, /百分比|\bcase\b|百分之|验证成功|<progress/)
+})
+
+
+test('进度根据真实工具状态响应更新，不把工具成功当作任务完成', async () => {
+  elements.length = 0
+  const props = reactive({
+    task: { task_id: 'A', prompt: '', status: 'running', created_at: '' }, selectedId: 'A',
+    streamState: 'live', loading: false, error: '',
+    messages: [
+      { id: 'u', kind: 'user', text: 'prompt' },
+      { id: 'a', kind: 'tool', text: '', toolName: 'bash', state: 'running' },
+      { id: 'b', kind: 'tool', text: '', toolName: 'read', state: 'success' },
+      { id: 'c', kind: 'tool', text: '', toolName: 'bash', state: 'error' },
+      { id: 'd', kind: 'assistant', text: 'output' },
+    ],
+  })
+  const app = renderer.createApp(ProgressPanel, props)
+  app.mount({})
+  const values = () => elements.filter(el => el.tag === 'dd').map(el => el.text)
+  try {
+    assert.deepEqual(values(), ['A', '运行中', '接收事件中', '3', '1', '1', '1'])
+    props.messages[1].state = 'success'
+    await nextTick()
+    assert.deepEqual(values(), ['A', '运行中', '接收事件中', '3', '0', '2', '1'])
+  } finally { app.unmount() }
 })
