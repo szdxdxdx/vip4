@@ -151,28 +151,44 @@ details>summary {
   flex:1
 }
 .task-card {
-  display:block;
+  display:flex;
+  align-items:center;
   width:100%;
   min-height:46px;
-  padding:9px 7px;
-  text-align:left;
-  border-color:transparent;
+  border:1px solid transparent;
+  border-left:3px solid transparent;
   margin-bottom:4px
 }
-.task-card.selected,.task-card.selected:hover:not(:disabled),.task-card.selected:active:not(:disabled) {
+.task-card.selected {
   background:var(--soft);
-  border-color:var(--accent)
+  border-left-color:var(--accent)
 }
-.task-row {
+.task-select {
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:7px
+  flex:1;
+  min-width:0;
+  min-height:44px;
+  gap:5px;
+  padding:7px 4px;
+  border-color:transparent;
+  background:transparent;
+  text-align:left
 }
-.task-row strong {
+.task-select strong {
   font-size:13px;
   min-width:0;
-  overflow-wrap:anywhere
+  overflow-wrap:anywhere;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis
+}
+.task-delete {
+  flex-shrink:0;
+  font-size:11px;
+  padding:5px 4px;
+  margin-right:3px
 }
 .status {
   font-size:10px;

@@ -7,7 +7,7 @@ import ArtifactPanel from './components/ArtifactPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
-  listError, detailError, streamError, createError, creating, refreshTasks, selectTask,
+  listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
   submit, initialize, refreshSelected } = useWorkbench()
 const activeView = ref<'conversation' | 'progress' | 'report' | 'files'>('conversation')
 const views = [
@@ -25,7 +25,8 @@ onMounted(initialize)
     <main class="workspace">
       <TaskSidebar
         :tasks="tasks" :selected-id="selectedId" :loading="listLoading" :error="listError"
-        @select="selectTask" @refresh="refreshTasks"
+        :deleting-id="deletingId" :delete-error="deleteError"
+        @select="selectTask" @refresh="refreshTasks" @delete="removeTask"
       />
       <div id="main-view" class="panel center-panel">
         <ConversationPanel

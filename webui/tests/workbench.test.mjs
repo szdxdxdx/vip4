@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
-import { createRenderer, nextTick, reactive } from 'vue'
+import { createRenderer, nextTick, reactive, h } from 'vue'
 import { parse, compileScript } from '@vue/compiler-sfc'
 
 // Compile the actual TS modules to a disposable directory, no testing dependency needed.
@@ -35,6 +35,8 @@ const { default: App } = await import(pathToFileURL(resolve(out, 'App.js')))
 const { applyTaskEvent, initialConversation } = await import(pathToFileURL(resolve(out, 'composables/eventReducer.js')))
 const api = await import(pathToFileURL(resolve(out, 'api.js')))
 const { useWorkbench } = await import(pathToFileURL(resolve(out, 'composables/useWorkbench.js')))
+const { default: TaskSidebar } = await import(pathToFileURL(resolve(out, 'components/TaskSidebar.js')))
+const originalWindow = globalThis.window
 const originalFetch = globalThis.fetch
 const rpc = data => ({ type: 'agent', data })
 const assistant = (text, thinking = '') => ({ role: 'assistant', content: [{ type: 'text', text }, { type: 'thinking', thinking }] })
@@ -43,7 +45,7 @@ const waitFor = async predicate => {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(r => setTimeout(r, 5)) }
   assert.fail('等待状态超时')
 }
-after(async () => { globalThis.fetch = originalFetch; await rm(out, { recursive: true, force: true }) })
+after(async () => { globalThis.fetch = originalFetch; globalThis.window = originalWindow; await rm(out, { recursive: true, force: true }) })
 
 test('metadata prompt appears once; cumulative snapshots replace deltas; thinking stays plaintext', () => {
   const state = initialConversation('原始提示词')
@@ -113,7 +115,7 @@ const elements = []
 const renderer = createRenderer({
   createElement: tag => {
     const el = { tag, tagName: tag.toUpperCase(), style: {}, props: {}, text: '', children: [],
-      options: [], close() {}, showModal() {}, addEventListener() {}, removeEventListener() {} }
+      options: [], getRootNode() { return {} }, close() {}, showModal() {}, addEventListener() {}, removeEventListener() {} }
     elements.push(el)
     return el
   },
@@ -249,7 +251,7 @@ test('视图切换保留对话实例与实时订阅，切任务返回对话', as
     assert.equal(scroll.scrollTop, 120)
     await click('文件下载')
     // 任务卡的 ID 在子节点内，选择未选中的卡片。
-    const taskB = elements.find(el => el.tag === 'button' && el.props.class?.includes('task-card') && el.props['aria-current'] !== 'true')
+    const taskB = elements.find(el => el.tag === 'button' && el.props.class?.includes('task-select') && el.props['aria-current'] !== 'true')
     taskB.props.onClick()
     await waitFor(() => streams.has('B'))
     await nextTick()
@@ -286,7 +288,7 @@ test('布局约束：精简顶栏与任务卡、右侧表单和按钮、中间�
   assert.match(app, /watch\(selectedId,[\s\S]*activeView.value = 'conversation'/)
   assert.match(composer, /prompt = atticalPrompt/)
   assert.match(css, /grid-template-columns:220px minmax\(0,1fr\) 340px/)
-  assert.match(css, /\.task-row strong \{[^}]*min-width:0;[^}]*overflow-wrap:anywhere/)
+  assert.match(css, /\.task-select strong \{[^}]*min-width:0;[^}]*overflow-wrap:anywhere/)
   assert.doesNotMatch(css, /\.brand|\.eyebrow|\.tabs|\.sidebar-foot|box-shadow|linear-gradient/)
   assert.match(progress, /props.messages.filter\(message => message.kind === 'tool'\)/)
   assert.doesNotMatch(progress, /百分比|\bcase\b|百分之|验证成功|<progress/)
@@ -315,4 +317,358 @@ test('进度根据真实工具状态响应更新，不把工具成功当作任�
     await nextTick()
     assert.deepEqual(values(), ['A', '运行中', '接收事件中', '3', '0', '2', '1'])
   } finally { app.unmount() }
+})
+
+const deferred = () => {
+  let resolve
+  const promise = new Promise(r => { resolve = r })
+  return { promise, resolve }
+}
+// 所有删除请求由 fetch mock 接管，不访问真实任务或启动 Agent。
+function deletionFixture(ids = ['A', 'B']) {
+  const streams = []
+  const requests = []
+  const deletion = deferred()
+  let listHandler
+  const task = id => ({ task_id: id, prompt: `prompt-${id}`, status: 'running', created_at: '' })
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url, options })
+    if (url === '/task/list_tasks') return listHandler ? listHandler() : response({ tasks: ids.map(task) })
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/delete_task')) return deletion.promise
+    if (url.startsWith('/task/get_task')) return response({ task: task(id), files: [{ path: 'report.html', kind: 'report_html', size: 10 }] })
+    return new Response(new ReadableStream({ start(c) { streams.push({ id, c, signal: options.signal }) } }))
+  }
+  const { app, w } = mountedWorkbench()
+  return { app, w, streams, requests, deletion, task,
+    setList: handler => { listHandler = handler },
+    async initialize() { await w.initialize(); await waitFor(() => streams.length === 1) },
+    close() { app.unmount(); for (const s of streams) { try { s.c.close() } catch {} } },
+  }
+}
+
+test('DELETE 编码任务 ID，复用 checked 显示 404/409', async () => {
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/task/delete_task?task_id=a%20%2F%23%E4%B8%AD')
+    assert.equal(options.method, 'DELETE')
+    return response({ task_id: 'a /#中', status: 'deleted' })
+  }
+  await api.deleteTask('a /#中')
+  for (const status of [404, 409]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({ detail: `删除错误 ${status}` }), { status })
+    await assert.rejects(api.deleteTask('A'), new RegExp(`删除错误 ${status}`))
+  }
+})
+
+test('取消永久删除确认不请求、不切任务、不打断订阅', async () => {
+  const f = deletionFixture()
+  try {
+    await f.initialize()
+    const count = f.requests.length
+    globalThis.window.confirm = text => {
+      assert.match(text, /永久删除任务.*A/)
+      assert.match(text, /全部文件不可恢复，运行任务将先停止/)
+      return false
+    }
+    await f.w.removeTask('A')
+    assert.equal(f.requests.length, count)
+    assert.equal(f.w.selectedId.value, 'A')
+    assert.equal(f.streams[0].signal.aborted, false)
+    assert.equal(f.w.deletingId.value, '')
+  } finally { f.close() }
+})
+
+test('删当前任务阻止重复点击、断订阅、清视图并选择剩余任务；旧列表和事件不能复活', async () => {
+  const f = deletionFixture()
+  try {
+    await f.initialize()
+    const oldList = deferred()
+    f.setList(() => oldList.promise)
+    const refreshing = f.w.refreshTasks()
+    const deleting = f.w.removeTask('A')
+    assert.equal(f.streams[0].signal.aborted, true)
+    assert.equal(f.w.deletingId.value, 'A')
+    await f.w.removeTask('A')
+    await f.w.removeTask('B')
+    assert.equal(f.requests.filter(r => r.options.method === 'DELETE').length, 1)
+    const freshList = deferred()
+    f.setList(() => freshList.promise)
+    f.deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await waitFor(() => f.streams.length === 2)
+    assert.equal(f.w.selectedId.value, 'B')
+    assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['B'])
+    assert.equal(f.w.task.value.task_id, 'B')
+    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-B'])
+    assert.equal(f.w.detailError.value, '')
+    assert.equal(f.w.streamError.value, '')
+    f.streams[0].c.enqueue(new TextEncoder().encode(JSON.stringify(rpc({ type: 'message_start', message: assistant('旧输出') })) + '\n'))
+    oldList.resolve(response({ tasks: [f.task('A')] }))
+    await refreshing
+    assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['B'])
+    freshList.resolve(response({ tasks: [f.task('A'), f.task('B')] }))
+    await deleting
+    assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['B'])
+    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-B'])
+    assert.equal(f.streams[1].signal.aborted, false)
+  } finally { f.close() }
+})
+
+test('删除唯一当前任务清空 task/messages/files/loading/stream/error', async () => {
+  const f = deletionFixture(['A'])
+  try {
+    await f.initialize()
+    f.w.detailError.value = '旧详情错误'
+    f.w.streamError.value = '旧流错误'
+    const deleting = f.w.removeTask('A')
+    f.deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await deleting
+    assert.equal(f.w.selectedId.value, '')
+    assert.equal(f.w.task.value, null)
+    assert.deepEqual(f.w.messages.value, [])
+    assert.deepEqual(f.w.files.value, [])
+    assert.equal(f.w.streamState.value, 'idle')
+    assert.equal(f.w.detailLoading.value, false)
+    assert.equal(f.w.detailError.value, '')
+    assert.equal(f.w.streamError.value, '')
+    assert.deepEqual(f.w.tasks.value, [])
+  } finally { f.close() }
+})
+
+test('删非当前任务不打断当前订阅和视图', async () => {
+  const f = deletionFixture()
+  try {
+    await f.initialize()
+    const task = f.w.task.value
+    const files = f.w.files.value
+    const deleting = f.w.removeTask('B')
+    assert.equal(f.streams[0].signal.aborted, false)
+    f.deletion.resolve(response({ task_id: 'B', status: 'deleted' }))
+    await deleting
+    assert.equal(f.w.selectedId.value, 'A')
+    assert.equal(f.w.task.value, task)
+    assert.equal(f.w.files.value, files)
+    assert.equal(f.streams.length, 1)
+    assert.equal(f.streams[0].signal.aborted, false)
+  } finally { f.close() }
+})
+
+for (const outcome of ['success', '404', '409', 'network']) {
+  test(`删除中切到 B，${outcome} 不抢焦点或打断 B，失败不假删`, async () => {
+    const f = deletionFixture()
+    try {
+      await f.initialize()
+      const deleting = f.w.removeTask('A')
+      void f.w.selectTask('B')
+      await waitFor(() => f.streams.length === 2)
+      if (outcome === 'success') f.deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+      else if (outcome === 'network') f.deletion.resolve(Promise.reject(new Error('网络中断')))
+      else f.deletion.resolve(new Response(JSON.stringify({ detail: `删除失败 ${outcome}` }), { status: Number(outcome) }))
+      await deleting
+      assert.equal(f.w.selectedId.value, 'B')
+      assert.equal(f.w.task.value.task_id, 'B')
+      assert.equal(f.streams[1].signal.aborted, false)
+      assert.equal(f.streams.length, 2)
+      assert.equal(f.w.tasks.value.some(t => t.task_id === 'A'), outcome !== 'success')
+      if (outcome !== 'success') {
+        assert.match(f.w.deleteError.value, /永久删除任务「A」失败/)
+        await f.w.refreshTasks()
+        assert.match(f.w.deleteError.value, /失败/)
+      }
+    } finally { f.close() }
+  })
+}
+
+test('404 失败保留任务卡；列表刷新不移除 pending 卡，恢复仍选中任务订阅', async () => {
+  const f = deletionFixture()
+  try {
+    await f.initialize()
+    const deleting = f.w.removeTask('A')
+    f.setList(() => response({ tasks: [f.task('B')] }))
+    await f.w.refreshTasks()
+    assert.equal(f.w.tasks.value.some(t => t.task_id === 'A'), true)
+    f.deletion.resolve(new Response(JSON.stringify({ detail: '任务不存在' }), { status: 404 }))
+    await deleting
+    await waitFor(() => f.streams.length === 2)
+    assert.equal(f.w.tasks.value.some(t => t.task_id === 'A'), true)
+    assert.match(f.w.deleteError.value, /任务不存在/)
+    assert.equal(f.w.selectedId.value, 'A')
+    assert.equal(f.streams[1].signal.aborted, false)
+    assert.equal(f.w.deletingId.value, '')
+  } finally { f.close() }
+})
+
+test('TaskSidebar 选择与删除是独立 button，无嵌套，pending 和错误可见', async () => {
+  const props = reactive({ tasks: [{ task_id: 'A', status: 'running' }], selectedId: 'A', loading: false,
+    error: '', deletingId: '', deleteError: '', onSelect: id => selected.push(id), onDelete: id => removed.push(id) })
+  const selected = [], removed = []
+  const rootElement = {}
+  // 用实际 sidebar 组件和内存渲染器验证 DOM 结构与事件接线。
+  const sidebarApp = renderer.createApp({ render: () => h(TaskSidebar, props) })
+  sidebarApp.mount(rootElement)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  try {
+    const buttons = nodes().filter(el => el.tag === 'button')
+    for (const button of buttons) assert.equal(descendants(button).slice(1).some(el => el.tag === 'button'), false)
+    const remove = buttons.find(el => el.props.class === 'task-delete')
+    remove.props.onClick()
+    assert.deepEqual(removed, ['A'])
+    assert.deepEqual(selected, [])
+    props.deletingId = 'A'
+    props.deleteError = '永久删除失败：409'
+    await nextTick()
+    assert.equal(remove.props.disabled, true)
+    assert.equal(remove.text, '删除中…')
+    assert.ok(nodes().some(el => el.props?.role === 'alert' && el.text === props.deleteError))
+  } finally { sidebarApp.unmount() }
+})
+
+test('删除时迟到的详情响应不恢复任务或启动事件订阅', async () => {
+  const detail = deferred()
+  const deletion = deferred()
+  let signal, eventReads = 0
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === '/task/list_tasks') return response({ tasks: [] })
+    if (options.method === 'DELETE') return deletion.promise
+    if (url.startsWith('/task/get_task')) { signal = options.signal; return detail.promise }
+    eventReads++
+    return new Response('')
+  }
+  const { app, w } = mountedWorkbench()
+  try {
+    const selecting = w.selectTask('A')
+    const deleting = w.removeTask('A')
+    assert.equal(signal.aborted, true)
+    deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await deleting
+    detail.resolve(response({ task: { task_id: 'A', prompt: '旧详情', status: 'running' }, files: [{ path: 'old.html' }] }))
+    await selecting
+    assert.equal(w.selectedId.value, '')
+    assert.equal(w.task.value, null)
+    assert.deepEqual(w.files.value, [])
+    assert.deepEqual(w.messages.value, [])
+    assert.equal(eventReads, 0)
+  } finally { app.unmount() }
+})
+
+test('删除中迟到的 reconcile 详情不串回删除任务', async () => {
+  const detail = deferred(), deletion = deferred()
+  let reads = 0
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === '/task/list_tasks') return response({ tasks: [] })
+    if (options.method === 'DELETE') return deletion.promise
+    if (url.startsWith('/task/get_task')) {
+      if (++reads === 2) return detail.promise
+      return response({ task: { task_id: 'A', prompt: 'A', status: 'running' }, files: [] })
+    }
+    return new Response('')
+  }
+  const { app, w } = mountedWorkbench()
+  try {
+    const selecting = w.selectTask('A')
+    await waitFor(() => reads === 2)
+    const deleting = w.removeTask('A')
+    deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await deleting
+    detail.resolve(response({ task: { task_id: 'A', prompt: '旧结果', status: 'completed' }, files: [{ path: 'old.html' }] }))
+    await selecting
+    assert.equal(w.task.value, null)
+    assert.equal(w.selectedId.value, '')
+    assert.deepEqual(w.files.value, [])
+  } finally { app.unmount() }
+})
+
+test('App 删除接线清除报告 iframe 和展开 dialog，不清空用户输入', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}
+  globalThis.ShadowRoot = class {}
+  const streams = [], deletion = deferred()
+  const task = { task_id: 'A', prompt: 'A', status: 'running' }
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === '/task/list_tasks') return response({ tasks: [task] })
+    if (options.method === 'DELETE') return deletion.promise
+    if (url.startsWith('/task/get_task')) return response({ task, files: [{ path: 'report.html', kind: 'report_html', size: 10 }] })
+    return new Response(new ReadableStream({ start(c) { streams.push({ c, signal: options.signal }) } }))
+  }
+  const rootElement = {}
+  const app = renderer.createApp(App)
+  app.mount(rootElement)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  try {
+    await waitFor(() => streams.length === 1)
+    nodes().find(el => el.props?.['aria-controls'] === 'main-view' && el.text === '验证结果报告').props.onClick()
+    await nextTick()
+    nodes().find(el => el.tag === 'button' && el.props?.['aria-haspopup'] === 'dialog').props.onClick()
+    await nextTick()
+    assert.ok(nodes().some(el => el.tag === 'dialog'))
+    assert.ok(nodes().some(el => el.tag === 'iframe'))
+    const input = nodes().find(el => el.tag === 'textarea')
+    input.props['onUpdate:modelValue']?.('用户保留的输入')
+    await nextTick()
+    const inputValue = input.value
+    assert.equal(inputValue, '用户保留的输入')
+    nodes().find(el => el.props?.class === 'task-delete').props.onClick()
+    deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await waitFor(() => !nodes().some(el => el.tag === 'iframe' || el.tag === 'dialog'))
+    assert.equal(streams[0].signal.aborted, true)
+    assert.equal(input.value, inputValue)
+    assert.equal(nodes().some(el => el.props?.class === 'task-card'), false)
+  } finally {
+    app.unmount()
+    for (const stream of streams) stream.c.close()
+    globalThis.Document = originalDocument
+    globalThis.ShadowRoot = originalShadowRoot
+  }
+})
+
+test('永久删除后可重新创建相同 ID，新任务不被已删除 ID 过滤', async () => {
+  const f = deletionFixture(['A'])
+  try {
+    await f.initialize()
+    const deleting = f.w.removeTask('A')
+    f.deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await deleting
+    const mockFetch = globalThis.fetch
+    globalThis.fetch = async (url, options) => url === '/task/create_task'
+      ? response({ task_id: 'A', status: 'created' }) : mockFetch(url, options)
+    assert.equal(await f.w.submit('A', '新提示词'), true)
+    await waitFor(() => f.streams.length === 2)
+    assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['A'])
+    assert.equal(f.w.selectedId.value, 'A')
+    assert.equal(f.streams[1].signal.aborted, false)
+  } finally { f.close() }
+})
+
+
+test('删除完成后新列表确认 ID 缺失，再之后 fresh list 同 ID 新任务可见', async () => {
+  const f = deletionFixture(['A'])
+  try {
+    await f.initialize()
+    const deleting = f.w.removeTask('A')
+    f.deletion.resolve(response({ task_id: 'A', status: 'deleted' }))
+    await deleting
+    // 最新列表仍含已删除 ID 时继续过滤，不释放标记。
+    await f.w.refreshTasks()
+    assert.deepEqual(f.w.tasks.value, [])
+    const oldList = deferred()
+    f.setList(() => oldList.promise)
+    const refreshing = f.w.refreshTasks()
+    f.setList(() => response({ tasks: [] }))
+    await f.w.refreshTasks()
+    // 已确认缺失后，旧 revision 仍不能复活任务。
+    oldList.resolve(response({ tasks: [f.task('A')] }))
+    await refreshing
+    assert.deepEqual(f.w.tasks.value, [])
+    const recreated = { ...f.task('A'), prompt: '其他页面重建的新任务', status: 'created' }
+    f.setList(() => response({ tasks: [recreated] }))
+    await f.w.refreshTasks()
+    assert.deepEqual(f.w.tasks.value, [recreated])
+    assert.equal(f.w.selectedId.value, '')
+    assert.equal(f.requests.some(r => r.url === '/task/create_task'), false)
+  } finally { f.close() }
 })

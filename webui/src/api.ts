@@ -21,6 +21,9 @@ export async function createTask(id: string, prompt: string): Promise<void> {
     body: JSON.stringify({ task_id: id, prompt }),
   }))
 }
+export async function deleteTask(id: string): Promise<void> {
+  await checked(await fetch(`/task/delete_task?task_id=${encodeURIComponent(id)}`, { method: 'DELETE' }))
+}
 export function fileUrl(id: string, path: string, download = false) {
   return `/task/get_file?task_id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}&download=${download}`
 }

@@ -19,6 +19,9 @@ export function useWorkbench() {
   const streamError = ref('')
   const createError = ref('')
   const creating = ref(false)
+  const deletingId = ref('')
+  const deleteError = ref('')
+  const deletedIds = new Set<string>()
   let generation = 0
   let listGeneration = 0
   let controller: AbortController | undefined
@@ -30,7 +33,15 @@ export function useWorkbench() {
     listError.value = ''
     try {
       const result = await api.listTasks()
-      if (revision === listGeneration) tasks.value = result
+      if (revision === listGeneration) {
+        // 最新列表确认删除后释放标记，允许其他页面重建同 ID。
+        for (const id of deletedIds) {
+          if (!result.some(item => item.task_id === id)) deletedIds.delete(id)
+        }
+        const pending = tasks.value.find(item => item.task_id === deletingId.value)
+        tasks.value = result.filter(item => !deletedIds.has(item.task_id))
+        if (pending && !tasks.value.some(item => item.task_id === pending.task_id)) tasks.value.push(pending)
+      }
     } catch (error) {
       if (revision === listGeneration) listError.value = errorText(error)
     } finally { if (revision === listGeneration) listLoading.value = false }
@@ -59,6 +70,7 @@ export function useWorkbench() {
     }
   }
   async function selectTask(id: string) {
+    if (id === deletingId.value || deletedIds.has(id)) return
     controller?.abort() // Disconnect the subscription only; the backend task keeps running.
     const current = new AbortController()
     controller = current
@@ -100,12 +112,52 @@ export function useWorkbench() {
     }
     await reconcile(id, version, current.signal)
   }
+  async function removeTask(id: string) {
+    if (deletingId.value || deletedIds.has(id)) return
+    if (!window.confirm(`永久删除任务「${id}」？全部文件不可恢复，运行任务将先停止。`)) return
+    deletingId.value = id
+    deleteError.value = ''
+    const interrupted = selectedId.value === id
+    if (interrupted) {
+      controller?.abort()
+      generation++
+      detailLoading.value = false
+      streamState.value = 'idle'
+    }
+    try {
+      await api.deleteTask(id)
+    } catch (error) {
+      deleteError.value = `永久删除任务「${id}」失败：${errorText(error)}`
+      deletingId.value = ''
+      if (interrupted && selectedId.value === id) void selectTask(id)
+      return
+    }
+    deletedIds.add(id)
+    // 作废删除前的列表请求，避免旧快照复活已删除任务。
+    listGeneration++
+    tasks.value = tasks.value.filter(item => item.task_id !== id)
+    deletingId.value = ''
+    if (selectedId.value === id) {
+      controller?.abort()
+      generation++
+      selectedId.value = ''
+      task.value = null
+      files.value = []
+      conversation.value = initialConversation()
+      detailLoading.value = false
+      streamState.value = 'idle'
+      detailError.value = streamError.value = ''
+      if (tasks.value[0]) void selectTask(tasks.value[0].task_id)
+    }
+    await refreshTasks()
+  }
   async function submit(id: string, prompt: string) {
     if (creating.value) return false
     creating.value = true
     createError.value = ''
     try {
       await api.createTask(id.trim(), prompt.replaceAll('<task_id>', id.trim()))
+      deletedIds.delete(id.trim())
       await refreshTasks()
       void selectTask(id.trim())
       return true
@@ -124,6 +176,6 @@ export function useWorkbench() {
   }
   onBeforeUnmount(() => { generation++; listGeneration++; controller?.abort() })
   return { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
-    listError, detailError, streamError, createError, creating, refreshTasks, selectTask,
+    listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
     submit, initialize, refreshSelected }
 }

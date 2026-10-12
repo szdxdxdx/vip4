@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from ..vip_task.task import (
     TaskExistsError,
+    TaskDeletingError,
     TaskNotFoundError,
     TaskPathError,
     TaskMetadataError,
@@ -22,8 +23,27 @@ class TaskRequest(BaseModel):
 async def create_task(body: TaskRequest, request: Request):
     try:
         return request.app.state.task_manager.create_task(body.task_id, body.prompt)
-    except TaskExistsError as error:
+    except (TaskExistsError, TaskDeletingError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
+
+
+@router.delete('/task/delete_task')
+async def delete_task(
+    request: Request,
+    task_id: str = Query(max_length=64, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$'),
+):
+    try:
+        return await request.app.state.task_manager.delete_task(task_id)
+    except TaskDeletingError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except TaskNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    except TaskPathError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+    except PermissionError:
+        raise HTTPException(status_code=403, detail='任务未完整删除：无权删除任务文件') from None
+    except OSError:
+        raise HTTPException(status_code=500, detail='任务未完整删除：无法删除任务文件') from None
 
 
 @router.get('/task/get_events')

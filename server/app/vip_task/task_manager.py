@@ -4,24 +4,56 @@ from datetime import datetime, timezone
 
 import config
 from .task import (
-    Task, TaskNotFoundError, TaskPathError, TaskMetadataError, TASK_ID_PATTERN,
+    Task, TaskDeletingError, TaskNotFoundError, TaskPathError, TaskMetadataError, TASK_ID_PATTERN,
 )
 
 
 class TaskManager:
     def __init__(self):
         self.tasks: dict[str, Task] = {}
+        self.deleting: set[str] = set()
 
     def create_task(self, task_id: str, prompt: str) -> dict:
+        if task_id in self.deleting:
+            raise TaskDeletingError('任务正在删除，请稍后重试')
         task = Task.create(task_id, prompt)
         self.tasks[task_id] = task
         return {'task_id': task_id, 'status': 'created'}
 
     def _get_task(self, task_id: str) -> Task:
         # 缓存任务实例；历史提示词和事件每次从本任务会话读取。
+        Task._task_dir(task_id)
         if task_id not in self.tasks:
             self.tasks[task_id] = Task(task_id)
         return self.tasks[task_id]
+
+    async def delete_task(self, task_id: str) -> dict:
+        if task_id in self.deleting:
+            raise TaskDeletingError('任务正在删除，请稍后重试')
+        task = self._get_task(task_id)
+        # 首次校验到标记之间不让出执行权，阻止重复删除和同 ID 重建。
+        self.deleting.add(task_id)
+
+        async def remove():
+            if task.job is not None:
+                if not task.job.done():
+                    task.job.cancel()
+                # 等待 Agent 上下文退出及元数据 finally，再删除目录。
+                await asyncio.gather(task.job, return_exceptions=True)
+            await asyncio.to_thread(task.delete_files)
+            self.tasks.pop(task_id, None)
+
+        operation = asyncio.create_task(remove())
+        try:
+            try:
+                await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                # 请求断开也要等清理完成，不能提前解除重建保护。
+                await operation
+                raise
+            return {'task_id': task_id, 'status': 'deleted'}
+        finally:
+            self.deleting.discard(task_id)
 
     def list_tasks(self) -> dict:
         root = config.VIP_TASK_DIR

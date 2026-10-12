@@ -3,6 +3,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from contextlib import aclosing
@@ -19,6 +20,10 @@ class TaskExistsError(Exception):
 
 
 class TaskNotFoundError(Exception):
+    pass
+
+
+class TaskDeletingError(Exception):
     pass
 
 
@@ -117,6 +122,10 @@ class Task:
         if directory.resolve().parent != root:
             raise TaskPathError('任务目录越界')
         return directory
+
+    def delete_files(self):
+        # 仅删除经校验的任务根目录；rmtree 不跟随内部符号链接。
+        shutil.rmtree(self._task_dir(self.task_id))
 
     @staticmethod
     def _workspace(task_dir: Path) -> Path:
