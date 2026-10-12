@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .service import (
+from ..vip_task.task import (
     TaskExistsError,
     TaskNotFoundError,
     TaskPathError,

@@ -9,8 +9,8 @@ from contextlib import aclosing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
-from ..agent.stream import agent_events
+import config
+from ..agent.pi import PiAgent
 
 
 class TaskExistsError(Exception):
@@ -51,7 +51,7 @@ MAX_WORKSPACE_FILES = 5000
 
 
 def _write_metadata(path: Path, metadata: dict):
-    # Readers see either the old or new complete document, never partial JSON.
+    # 原子替换元数据，避免订阅读到未写完的 JSON。
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -66,11 +66,15 @@ def _write_metadata(path: Path, metadata: dict):
             temporary.unlink(missing_ok=True)
 
 
-class TaskManager:
-    def __init__(self):
-        self.jobs: dict[str, asyncio.Task] = {}
+class Task:
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        self.task_dir = config.VIP_TASK_DIR / task_id
+        self.job: asyncio.Task | None = None
 
-    def create_task(self, task_id: str, prompt: str) -> dict:
+    @classmethod
+    def create(cls, task_id: str, prompt: str):
+        # 初始化单任务目录与元数据，执行不依赖事件订阅。
         config.VIP_TASK_DIR.mkdir(parents=True, exist_ok=True)
         task_dir = config.VIP_TASK_DIR / task_id
         try:
@@ -94,10 +98,9 @@ class TaskManager:
         (task_dir / 'events.jsonl').touch()
 
         agent_prompt = f'/skill:verify-ip 工作目录为 {workspace}\n\n{prompt}'
-        job = asyncio.create_task(self._run(task_dir, agent_prompt))
-        self.jobs[task_id] = job
-        job.add_done_callback(lambda _: self.jobs.pop(task_id, None))
-        return {'task_id': task_id, 'status': 'created'}
+        task = cls(task_id)
+        task.job = asyncio.create_task(task.async_run(agent_prompt))
+        return task
 
     @staticmethod
     def _task_dir(task_id: str) -> Path:
@@ -126,7 +129,7 @@ class TaskManager:
 
     @staticmethod
     def _relative_path(value: str) -> Path:
-        # Also reject Windows-style paths, although the backend runs on Linux.
+        # 同时拒绝 Windows 路径，统一限定为 workspace 相对路径。
         if not value or '\\' in value or ':' in value or '\x00' in value:
             raise TaskPathError('非法文件路径', 400)
         parts = value.split('/')
@@ -153,7 +156,7 @@ class TaskManager:
                 raise TaskPathError('文件路径越界')
             raise TaskNotFoundError('文件不存在')
         kind = {'report.html': 'report_html', 'report.json': 'report_json'}.get(path.name, 'file')
-        # Never serve arbitrary active content as executable same-origin content.
+        # 报告之外的主动内容按纯文本提供，避免同源执行。
         media_type = 'text/plain'
         attachment = False
         if kind == 'report_html':
@@ -170,13 +173,14 @@ class TaskManager:
                 guessed_type in ('application/javascript', 'application/xml',
                                  'application/xhtml+xml', 'image/svg+xml')
             ):
-                # Known binary formats retain their MIME type, but are downloads.
+                # 二进制保留 MIME 类型，但只能下载。
                 media_type = guessed_type
                 attachment = True
         return WorkspaceFile(resolved, kind, media_type, attachment)
 
     @classmethod
     def _metadata(cls, task_dir: Path) -> dict:
+        # 校验元数据，并仅返回仍可安全读取的报告路径。
         source = task_dir / 'task.json'
         if source.is_symlink():
             raise TaskPathError('不允许元数据符号链接')
@@ -207,41 +211,17 @@ class TaskManager:
             task['reports'] = reports
         return task
 
-    def list_tasks(self) -> dict:
-        root = config.VIP_TASK_DIR
-        if not root.is_dir():
-            return {'tasks': []}
-        tasks = []
-        # Only immediate task directories; never search outside the tasks root.
-        for entry in root.iterdir():
-            if not re.fullmatch(TASK_ID_PATTERN, entry.name) or len(entry.name) > 64:
-                continue
-            try:
-                tasks.append(self._metadata(self._task_dir(entry.name)))
-            except (TaskNotFoundError, TaskPathError, TaskMetadataError, OSError):
-                continue
-        def created_order(task):
-            try:
-                created = datetime.fromisoformat(task['created_at'])
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                return created.timestamp(), task['task_id']
-            except (ValueError, OverflowError):
-                return float('-inf'), task['task_id']
-
-        tasks.sort(key=created_order, reverse=True)
-        return {'tasks': tasks}
-
-    def get_task(self, task_id: str) -> dict:
-        task_dir = self._task_dir(task_id)
+    def get_task(self) -> dict:
+        task_dir = self._task_dir(self.task_id)
         task = self._metadata(task_dir)
         workspace = self._workspace(task_dir)
+        # 有界扫描工作区，保留原文件分类与返回顺序。
         files = []
         pending = [workspace]
         scanned = 0
         while pending:
             directory = pending.pop()
-            # Recheck queued directories: do not follow a replaced symlink.
+            # 扫描时重新检查目录边界，跳过隐藏、临时文件和符号链接。
             if directory.is_symlink() or not directory.resolve().is_relative_to(workspace):
                 continue
             try:
@@ -272,11 +252,11 @@ class TaskManager:
         files.sort(key=lambda file: (file['kind'] == 'file', file['path']))
         return {'task': task, 'files': files}
 
-    def get_file(self, task_id: str, path: str) -> WorkspaceFile:
-        return self._workspace_file(self._workspace(self._task_dir(task_id)), path)
+    def get_file(self, path: str) -> WorkspaceFile:
+        return self._workspace_file(self._workspace(self._task_dir(self.task_id)), path)
 
-    def get_events(self, task_id: str):
-        output = config.VIP_TASK_DIR / task_id / 'events.jsonl'
+    def get_events(self):
+        output = self.task_dir / 'events.jsonl'
         if not output.is_file():
             raise TaskNotFoundError('任务不存在')
 
@@ -286,14 +266,91 @@ class TaskManager:
                     line = file.readline()
                     if line:
                         yield line
-                    elif task_id not in self.jobs:
+                    elif self.job is None or self.job.done():
                         return
                     else:
                         await asyncio.sleep(0.05)
 
         return stream()
 
-    async def _run(self, task_dir: Path, prompt: str):
+    def _create_agent(self) -> PiAgent:
+        # 验证任务运行边界，并集中配置验证专用参数、提示词和临时环境。
+        cwd = (self.task_dir / 'workspace').expanduser().resolve(strict=True)
+        if (
+            cwd.name != 'workspace'
+            or cwd.parent.parent != config.VIP_TASK_DIR.resolve()
+            or not cwd.is_dir()
+        ):
+            raise ValueError('Agent 工作目录必须是 tasks/<task_id>/workspace/')
+        session_dir = (cwd.parent / 'session').resolve()
+        session_dir.mkdir(parents=True, exist_ok=True)
+        tmp_dir = cwd / 'tmp'
+        tmp_dir.mkdir(exist_ok=True)
+
+        if not config.VIP_SKILL_DIR.is_dir():
+            raise FileNotFoundError(f'Skill 目录不存在：{config.VIP_SKILL_DIR}')
+
+        return PiAgent(
+            argv=[
+                'pi',
+                '--mode', 'rpc',
+                '--tools', config.PI_TOOLS,
+                '--no-extensions',
+                '--no-approve',
+                '--no-skills',
+                '--skill', str(config.VIP_SKILL_DIR),
+                '--no-prompt-templates',
+                '--no-context-files',
+                '--append-system-prompt', (
+                    f'本轮软件 IP 验证工作目录只能是 {cwd}。'
+                    f'所有输出和临时文件写入该目录，临时文件放在 {tmp_dir}。'
+                    f'输入数据 {config.VIP_DATASET_DIR} 只读；'
+                    f'允许读取 {config.VIP_SKILL_DIR} 中的 SKILL、参考文档，执行其脚本与已准备的虚拟环境。'
+                    '不得读写其他任务或未指定的数据目录，不得修改原始 IP、SKILL 或全局环境。'
+                    '按用户指定 SKILL 执行完整流程，不限制工具调用次数。'
+                    '只有最终验证报告生成后才算任务完成，不得捏造工具结果。'
+                    '完成任务后最终回复必须且只能是【任务已完成】，不得附带摘要、报告路径或其他文字。'
+                    '若未完成或遇到无法继续的问题，必须如实说明，禁止回复【任务已完成】。'
+                ),
+            ],
+            cwd=cwd,
+            session_dir=session_dir,
+            close_timeout=config.PI_CLOSE_TIMEOUT,
+            env={
+                **os.environ,
+                'TMPDIR': str(tmp_dir), 'TMP': str(tmp_dir), 'TEMP': str(tmp_dir),
+                'PYTHONDONTWRITEBYTECODE': '1',
+            },
+        )
+
+    async def _agent_events(self, prompt: str):
+        # 按原完成信号等待回复，并把调用异常转成既有事件文本。
+        try:
+            async with self._create_agent() as agent, asyncio.timeout(config.PI_TIMEOUT):
+                await asyncio.to_thread(agent.send_prompt, prompt)
+                message = {}
+                while True:
+                    event = await asyncio.to_thread(agent.receive)
+                    if event.get("type") == "response" and event.get("command") == "prompt":
+                        if not event.get("success") or event.get("data", {}).get("disposition") == "handled":
+                            raise RuntimeError("Pi 未接受对话请求")
+                    elif event.get("type") == "message_end":
+                        if event["message"].get("role") == "assistant":
+                            message = event["message"]
+                    elif event.get("type") == "agent_settled":
+                        if event.get("aborted") or message.get("stopReason") not in ("stop", "length"):
+                            raise RuntimeError("Pi 未能生成回复")
+                    yield event
+                    if event.get("type") == "agent_settled":
+                        return
+        except TimeoutError:
+            yield {"type": "error", "error": "LLM 回复超时"}
+        except (OSError, RuntimeError, ValueError):
+            yield {"type": "error", "error": "Pi 调用失败，请检查模型配置"}
+
+    async def async_run(self, prompt: str):
+        # 后台执行、事件落盘与报告完成门槛属于单任务生命周期。
+        task_dir = self.task_dir
         metadata_file = task_dir / 'task.json'
         metadata = json.loads(metadata_file.read_text(encoding='utf-8'))
         metadata['status'] = 'running'
@@ -305,9 +362,7 @@ class TaskManager:
                 output.flush()
 
             try:
-                async with aclosing(agent_events(
-                    prompt, cwd=task_dir / 'workspace', session_dir=task_dir / 'session',
-                )) as events:
+                async with aclosing(self._agent_events(prompt)) as events:
                     async for event in events:
                         write({'type': 'agent', 'data': event})
                         if event.get('type') == 'error':
@@ -335,8 +390,3 @@ class TaskManager:
                 metadata['status'] = status
                 _write_metadata(metadata_file, metadata)
 
-    async def close(self):
-        jobs = list(self.jobs.values())
-        for job in jobs:
-            job.cancel()
-        await asyncio.gather(*jobs, return_exceptions=True)
