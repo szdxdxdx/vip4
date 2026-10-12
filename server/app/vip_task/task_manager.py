@@ -10,18 +10,18 @@ from .task import (
 
 class TaskManager:
     def __init__(self):
-        self.active_tasks: dict[str, Task] = {}
+        self.tasks: dict[str, Task] = {}
 
     def create_task(self, task_id: str, prompt: str) -> dict:
         task = Task.create(task_id, prompt)
-        self.active_tasks[task_id] = task
-        task.job.add_done_callback(lambda _: self.active_tasks.pop(task_id, None))
+        self.tasks[task_id] = task
         return {'task_id': task_id, 'status': 'created'}
 
     def _get_task(self, task_id: str) -> Task:
-        # 活跃任务复用原对象，历史回放才能准确等待后台执行结束。
-        task = self.active_tasks.get(task_id)
-        return task if task is not None else Task(task_id)
+        # 缓存任务实例；历史提示词和事件每次从本任务会话读取。
+        if task_id not in self.tasks:
+            self.tasks[task_id] = Task(task_id)
+        return self.tasks[task_id]
 
     def list_tasks(self) -> dict:
         root = config.VIP_TASK_DIR
@@ -33,7 +33,9 @@ class TaskManager:
             if not re.fullmatch(TASK_ID_PATTERN, entry.name) or len(entry.name) > 64:
                 continue
             try:
-                tasks.append(Task._metadata(Task._task_dir(entry.name)))
+                task = Task._metadata(Task._task_dir(entry.name))
+                task['prompt'] = self._get_task(entry.name).get_prompt()
+                tasks.append(task)
             except (TaskNotFoundError, TaskPathError, TaskMetadataError, OSError):
                 continue
 
@@ -59,7 +61,8 @@ class TaskManager:
         return self._get_task(task_id).get_events()
 
     async def close(self):
-        jobs = [task.job for task in self.active_tasks.values()]
+        jobs = [task.job for task in self.tasks.values()
+                if task.job is not None and not task.job.done()]
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import config
 from ..agent.pi import PiAgent
+from .pi_session import read_history
 
 
 class TaskExistsError(Exception):
@@ -70,6 +71,8 @@ class Task:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self.task_dir = config.VIP_TASK_DIR / task_id
+        self.events: list[str] = []
+        self.prompt: str = ''
         self.job: asyncio.Task | None = None
 
     @classmethod
@@ -82,23 +85,22 @@ class Task:
         except FileExistsError:
             raise TaskExistsError('task_id 已存在，请使用新的任务 ID') from None
 
-        session_dir = task_dir / 'session'
+        session_dir = task_dir / 'pi_session'
         workspace = task_dir / 'workspace'
         for directory in (session_dir, workspace):
             directory.mkdir()
 
         metadata = {
             'task_id': task_id,
-            'prompt': prompt,
             'status': 'created',
             'created_at': datetime.now(timezone.utc).isoformat(),
         }
         _write_metadata(task_dir / 'task.json', metadata)
         (task_dir / '.gitignore').write_text('*\n', encoding='utf-8')
-        (task_dir / 'events.jsonl').touch()
 
         agent_prompt = f'/skill:verify-ip 工作目录为 {workspace}\n\n{prompt}'
         task = cls(task_id)
+        task.prompt = prompt
         task.job = asyncio.create_task(task.async_run(agent_prompt))
         return task
 
@@ -192,11 +194,11 @@ class Task:
             raise TaskMetadataError('任务元数据损坏') from None
         if not isinstance(metadata, dict) or any(
             not isinstance(metadata.get(key), str)
-            for key in ('prompt', 'status', 'created_at')
+            for key in ('status', 'created_at')
         ):
             raise TaskMetadataError('任务元数据格式错误')
         task = {'task_id': task_dir.name, **{
-            key: metadata[key] for key in ('prompt', 'status', 'created_at')
+            key: metadata[key] for key in ('status', 'created_at')
         }}
         if isinstance(metadata.get('reports'), list):
             reports = []
@@ -214,6 +216,7 @@ class Task:
     def get_task(self) -> dict:
         task_dir = self._task_dir(self.task_id)
         task = self._metadata(task_dir)
+        task['prompt'] = self.get_prompt()
         workspace = self._workspace(task_dir)
         # 有界扫描工作区，保留原文件分类与返回顺序。
         files = []
@@ -255,21 +258,35 @@ class Task:
     def get_file(self, path: str) -> WorkspaceFile:
         return self._workspace_file(self._workspace(self._task_dir(self.task_id)), path)
 
+    def read_history(self):
+        return read_history(self._task_dir(self.task_id),
+                            config.VIP_SKILL_DIR / 'verify-ip' / 'SKILL.md')
+
+    def get_prompt(self) -> str:
+        if self.job is not None and not self.job.done():
+            return self.prompt
+        return self.read_history().prompt
+
     def get_events(self):
-        output = self.task_dir / 'events.jsonl'
-        if not output.is_file():
-            raise TaskNotFoundError('任务不存在')
+        self._task_dir(self.task_id)
+        live = self.job is not None and not self.job.done()
 
         async def stream():
-            with output.open(encoding='utf-8') as file:
-                while True:
-                    line = file.readline()
-                    if line:
-                        yield line
-                    elif self.job is None or self.job.done():
-                        return
-                    else:
-                        await asyncio.sleep(0.05)
+            # 订阅开始时固定来源，运行结束后只排空内存，不拼接历史。
+            if not live:
+                for event in self.read_history().events:
+                    yield json.dumps(event, ensure_ascii=False) + '\n'
+                return
+            index = 0
+            while True:
+                if index < len(self.events):
+                    line = self.events[index]
+                    index += 1
+                    yield line
+                elif self.job is None or self.job.done():
+                    return
+                else:
+                    await asyncio.sleep(0.05)
 
         return stream()
 
@@ -282,7 +299,7 @@ class Task:
             or not cwd.is_dir()
         ):
             raise ValueError('Agent 工作目录必须是 tasks/<task_id>/workspace/')
-        session_dir = (cwd.parent / 'session').resolve()
+        session_dir = (cwd.parent / 'pi_session').resolve()
         session_dir.mkdir(parents=True, exist_ok=True)
         tmp_dir = cwd / 'tmp'
         tmp_dir.mkdir(exist_ok=True)
@@ -349,44 +366,42 @@ class Task:
             yield {"type": "error", "error": "Pi 调用失败，请检查模型配置"}
 
     async def async_run(self, prompt: str):
-        # 后台执行、事件落盘与报告完成门槛属于单任务生命周期。
+        # 后台执行、内存事件与报告完成门槛属于单任务生命周期。
         task_dir = self.task_dir
         metadata_file = task_dir / 'task.json'
         metadata = json.loads(metadata_file.read_text(encoding='utf-8'))
         metadata['status'] = 'running'
         _write_metadata(metadata_file, metadata)
         status = 'completed'
-        with (task_dir / 'events.jsonl').open('a', encoding='utf-8') as output:
-            def write(event):
-                output.write(json.dumps(event, ensure_ascii=False) + '\n')
-                output.flush()
+        def write(event):
+            self.events.append(json.dumps(event, ensure_ascii=False) + '\n')
 
-            try:
-                async with aclosing(self._agent_events(prompt)) as events:
-                    async for event in events:
-                        write({'type': 'agent', 'data': event})
-                        if event.get('type') == 'error':
-                            status = 'failed'
-                if status == 'completed':
-                    reports = []
-                    workspace = task_dir / 'workspace'
-                    for report in workspace.glob('*_suite/output/report.json'):
-                        html = report.with_suffix('.html')
-                        if html.is_file() and html.stat().st_size:
-                            json.loads(report.read_text(encoding='utf-8'))
-                            reports.append(str(report.relative_to(workspace)))
-                    if not reports:
+        try:
+            async with aclosing(self._agent_events(prompt)) as events:
+                async for event in events:
+                    write({'type': 'agent', 'data': event})
+                    if event.get('type') == 'error':
                         status = 'failed'
-                        write({'type': 'error', 'error': 'Agent 已停止，但未生成最终验证报告，任务未完成'})
-                    metadata['reports'] = reports
-            except asyncio.CancelledError:
-                status = 'cancelled'
-                write({'type': 'error', 'error': '服务关闭，任务已取消'})
-                raise
-            except Exception:
-                status = 'failed'
-                write({'type': 'error', 'error': '任务执行失败'})
-            finally:
-                metadata['status'] = status
-                _write_metadata(metadata_file, metadata)
+            if status == 'completed':
+                reports = []
+                workspace = task_dir / 'workspace'
+                for report in workspace.glob('*_suite/output/report.json'):
+                    html = report.with_suffix('.html')
+                    if html.is_file() and html.stat().st_size:
+                        json.loads(report.read_text(encoding='utf-8'))
+                        reports.append(str(report.relative_to(workspace)))
+                if not reports:
+                    status = 'failed'
+                    write({'type': 'error', 'error': 'Agent 已停止，但未生成最终验证报告，任务未完成'})
+                metadata['reports'] = reports
+        except asyncio.CancelledError:
+            status = 'cancelled'
+            write({'type': 'error', 'error': '服务关闭，任务已取消'})
+            raise
+        except Exception:
+            status = 'failed'
+            write({'type': 'error', 'error': '任务执行失败'})
+        finally:
+            metadata['status'] = status
+            _write_metadata(metadata_file, metadata)
 
