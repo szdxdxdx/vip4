@@ -2,7 +2,7 @@
 
 ## 断言与 specification 匹配
 
-容器预处理环境无法提供 `<assert.h>`，使用与当前断言 specification 匹配的最小 shim：
+若当前预处理环境无法提供 `<assert.h>`，使用与当前断言 specification 匹配的最小 shim：
 ```c
 extern void __assert_fail(const char *, const char *, unsigned int, const char *);
 #define assert(cond) ((cond) ? (void)0 : __assert_fail(#cond, __FILE__, __LINE__, __func__))
@@ -15,7 +15,7 @@ extern void __assert_fail(const char *, const char *, unsigned int, const char *
 
 若实现可以由驱动安全地 `#include`，优先采用单翻译单元：驱动 include 真实实现 `.c`，配置的 `files` 只列驱动文件。
 这样仍验证原始实现，同时避免预处理后的多个翻译单元触发 CFA 位置映射异常。
-include 路径必须依赖 runner 的只读挂载和 `-I`，不得写宿主绝对路径。若实现不适合直接 include，再把实现和驱动分别列入 `files`；
+通过 `-I` 配置头文件和实现文件的搜索路径，支持绝对路径或相对套件目录 `suite_dir` 的路径。若实现不适合直接 include，再把实现和驱动分别列入 `files`；
 出现 CPAchecker 内部多翻译单元解析异常时，改回单翻译单元 wrapper。
 
 必要时，允许自定义与验证任务相关的辅助宏或函数，保存到 `<suite>/helper.c (.h)` 中

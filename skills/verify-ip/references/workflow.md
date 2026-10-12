@@ -69,14 +69,14 @@ void IP_Func(void *p); // 核心功能函数
 ### step-2 准备环境
 
 SKILL 所需的 python 虚拟环境位于 `<skill>/.venv/`
-若虚拟环境不存在则创建，要求 python>=3.14（例如使用 `python3.14 -m venv`），并安装依赖 `<skill>/requirements.txt`
+若虚拟环境不存在则创建（建议使用 uv），要求 python>=3.14，并安装依赖 `<skill>/requirements.txt`
 必须使用虚拟环境中的解释器来执行 `<skill>/scripts/` 中的 python 脚本
 
 根据用户指定的验证工具，检查系统当前是否有可用的验证工具环境（只做轻量级检查，SKILL 不提供验证工具的安装配置指导）
 - CBMC
     要求系统当前有可用的 CBMC，版本 CBMC>=6.8.0
 - CPAchecker
-    要求系统可执行 Docker，本地有可用的 CPAchecker 镜像
+    要求系统当前有可用的 CPAchecker，并确认所用分析配置和 specification 的文件路径
 - KLEE
     要求系统当前有可用的 clang 和 klee 且 clang 生成的 LLVM bitcode 与 KLEE 所支持的 LLVM 版本兼容
     建议 KLEE>=3.2，clang 使用 /usr/bin/clang-13

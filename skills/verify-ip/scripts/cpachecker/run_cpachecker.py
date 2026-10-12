@@ -7,7 +7,7 @@ from core.cpachecker.run_cpachecker import run_cpachecker
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="通过 Docker 执行 CPAchecker 验证")
+    parser = argparse.ArgumentParser(description="执行 CPAchecker 验证")
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--case", required=True)
     args = parser.parse_args()

@@ -25,7 +25,7 @@
     "interpretation": "NO_REACHABLE_VIOLATION | REACHABLE_VIOLATION | NO_FINAL_CONCLUSION | TIME_LIMIT_REACHED | TOOL_ERROR"
   },
 
-  // CPAchecker 或 Docker 启动是否发生工具层错误
+  // CPAchecker 启动或执行是否发生工具层错误
   "tool_error": <bool>,
   // 工具错误摘要；无工具错误时为空字符串
   "error_summary": <str>,
