@@ -821,3 +821,25 @@ iframe {
     gap: 10px;
   }
 }
+
+/* 项目页与单 IP 工作台共用朴素的边框和按钮。 */
+.app-header { gap:20px; min-height:44px; height:auto; padding-block:5px }
+.mode-controls,.project-actions,.project-summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap }
+.mode-controls .active { background:var(--soft); border-color:var(--accent) }
+.project-panel { flex:1; min-height:0; overflow:auto; padding:10px; display:grid; grid-template-columns:minmax(260px,340px) minmax(0,1fr); gap:10px; align-items:start }
+.project-input,.project-output { padding:16px }
+.project-input form { display:flex; flex-direction:column; gap:10px; margin:16px 0 }
+.project-input input,.project-input textarea { width:100%; border:1px solid var(--line); padding:8px; border-radius:0; background:#fff; color:inherit }
+.project-input textarea { resize:vertical }
+.project-hint { color:var(--muted); line-height:1.7; margin:8px 0 }
+.project-error { color:#a52828; white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 }
+.project-summary { overflow-wrap:anywhere }
+.project-summary h3 { font-size:14px }
+.project-task { border-top:1px solid var(--line); padding-top:12px; margin-top:16px }
+.project-files { padding-left:20px }
+.project-files li { padding:6px 0; overflow-wrap:anywhere }
+.project-files span { color:var(--muted); margin-left:10px; font-size:12px }
+@media (max-width:760px) {
+  .app-header { flex-wrap:wrap; gap:8px }
+  .project-panel { grid-template-columns:minmax(0,1fr) }
+}

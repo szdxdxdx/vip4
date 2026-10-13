@@ -5,10 +5,18 @@ import ConversationPanel from './components/ConversationPanel.vue'
 import TaskComposer from './components/TaskComposer.vue'
 import ArtifactPanel from './components/ArtifactPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
+import ProjectPanel from './components/ProjectPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
   listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
   submit, initialize, refreshSelected } = useWorkbench()
+const mode = ref<'single' | 'project'>('single')
+function viewProjectTask(id: string) {
+  mode.value = 'single'
+  activeView.value = 'conversation'
+  void selectTask(id)
+  void refreshTasks()
+}
 const activeView = ref<'conversation' | 'progress' | 'report' | 'files'>('conversation')
 const views = [
   { id: 'conversation', label: '对话' },
@@ -21,8 +29,14 @@ onMounted(initialize)
 </script>
 <template>
   <div class="workbench">
-    <header class="app-header"><h1>软件IP验证</h1></header>
-    <main class="workspace">
+    <header class="app-header">
+      <h1>软件IP验证</h1>
+      <nav class="mode-controls" aria-label="验证模式">
+        <button type="button" :class="{ active: mode === 'single' }" :aria-pressed="mode === 'single'" @click="mode = 'single'">单 IP 验证</button>
+        <button type="button" :class="{ active: mode === 'project' }" :aria-pressed="mode === 'project'" @click="mode = 'project'">项目验证</button>
+      </nav>
+    </header>
+    <main v-show="mode === 'single'" class="workspace">
       <TaskSidebar
         :tasks="tasks" :selected-id="selectedId" :loading="listLoading" :error="listError"
         :deleting-id="deletingId" :delete-error="deleteError"
@@ -30,7 +44,7 @@ onMounted(initialize)
       />
       <div id="main-view" class="panel center-panel">
         <ConversationPanel
-          v-show="activeView === 'conversation'" :active="activeView === 'conversation'"
+          v-show="activeView === 'conversation'" :active="mode === 'single' && activeView === 'conversation'"
           :task="task" :selected-id="selectedId" :messages="messages"
           :loading="detailLoading" :error="detailError" :stream-error="streamError"
           :stream-state="streamState" @replay="selectTask(selectedId)"
@@ -57,5 +71,6 @@ onMounted(initialize)
         </nav>
       </aside>
     </main>
+    <ProjectPanel v-show="mode === 'project'" :active="mode === 'project'" @view-task="viewProjectTask" />
   </div>
 </template>

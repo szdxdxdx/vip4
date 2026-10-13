@@ -11,7 +11,7 @@ import { parse, compileScript } from '@vue/compiler-sfc'
 const root = resolve(import.meta.dirname, '..')
 await mkdir(resolve(root, 'node_modules/.tmp'), { recursive: true })
 const out = await mkdtemp(resolve(root, 'node_modules/.tmp/workbench-test-'))
-for (const file of ['types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts', 'templates/attical.ts']) {
+for (const file of ['projectTypes.ts', 'projectApi.ts', 'composables/useProject.ts', 'types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts', 'templates/attical.ts']) {
   const source = await readFile(resolve(root, 'src', file), 'utf8')
   let code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
   code = code.replace(/from '(\.[^']+)'/g, "from '$1.js'")
@@ -20,7 +20,7 @@ for (const file of ['types.ts', 'api.ts', 'composables/eventReducer.ts', 'compos
   await writeFile(destination, code)
 }
 // 编译真实组件，用 Vue 内存渲染器检查视图切换，无浏览器依赖。
-for (const file of ['App.vue', ...['TaskSidebar', 'ConversationPanel', 'MessageItem', 'TaskComposer', 'ArtifactPanel', 'ProgressPanel'].map(name => `components/${name}.vue`)]) {
+for (const file of ['App.vue', ...['ProjectPanel', 'TaskSidebar', 'ConversationPanel', 'MessageItem', 'TaskComposer', 'ArtifactPanel', 'ProgressPanel'].map(name => `components/${name}.vue`)]) {
   const source = await readFile(resolve(root, 'src', file), 'utf8')
   const { descriptor } = parse(source)
   const script = compileScript(descriptor, { id: file, inlineTemplate: true })
@@ -272,7 +272,7 @@ test('布局约束：精简顶栏与任务卡、右侧表单和按钮、中间�
   const composer = await source('components/TaskComposer.vue')
   const progress = await source('components/ProgressPanel.vue')
   const css = await source('style.css')
-  assert.match(app, /<header class="app-header"><h1>软件IP验证<\/h1><\/header>/)
+  assert.match(app, /<header class="app-header">[\s\S]*<h1>软件IP验证<\/h1>[\s\S]*aria-label="验证模式"/)
   assert.doesNotMatch(app, /brand-mark|WORKSPACE|Agent 验证工作台/)
   assert.doesNotMatch(sidebar, /item\.prompt|created_at|<time|无提示词|TASKS|sidebar-foot/)
   assert.match(sidebar, /item\.task_id/)
@@ -671,4 +671,247 @@ test('删除完成后新列表确认 ID 缺失，再之后 fresh list 同 ID 新
     assert.equal(f.w.selectedId.value, '')
     assert.equal(f.requests.some(r => r.url === '/task/create_task'), false)
   } finally { f.close() }
+})
+
+const { useProject } = await import(pathToFileURL(resolve(out, 'composables/useProject.js')))
+const projectApi = await import(pathToFileURL(resolve(out, 'projectApi.js')))
+const { ref } = await import('vue')
+const flushProject = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); await nextTick() }
+function mountedProject() {
+  let project
+  const active = ref(true)
+  const app = renderer.createApp({ setup() { project = useProject(active); return () => null } })
+  app.mount({})
+  return { app, p: project, active }
+}
+function projectClock() {
+  const originalSet = globalThis.setTimeout, originalClear = globalThis.clearTimeout
+  const timers = new Map()
+  let serial = 0
+  globalThis.setTimeout = (callback, delay) => { assert.equal(delay, 2000); timers.set(++serial, callback); return serial }
+  globalThis.clearTimeout = id => timers.delete(id)
+  return { timers, tick() { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()) },
+    restore() { globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear } }
+}
+const projectProgress = (id, status = 'running') => ({ projectID: id, status, total: 1, finished: status === 'running' ? 0 : 1, tasks: [{ task_id: `${id}-task`, status }] })
+const projectResults = id => ({ projectID: id, tasks: [{ task_id: `${id}-task`, status: 'completed', files: [{ path: '报告 #.html', size: 12, kind: 'report_html', download_url: '/task/get_file?task_id=t&path=report.html&download=true' }] }] })
+
+test('项目 API 编码、默认提示词、409 和 404 错误', async () => {
+  const calls = []
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response({ projectID: '中 &/#', status: 'accepted' }) }
+  const signal = new AbortController().signal
+  await projectApi.createProject('中 &/#', '', signal)
+  assert.deepEqual(JSON.parse(calls[0].options.body), { projectID: '中 &/#' })
+  await projectApi.createProject('中 &/#', '自定义 CBMC', signal)
+  assert.equal(JSON.parse(calls[1].options.body).prompt, '自定义 CBMC')
+  await projectApi.getProjectProgress('中 &/#', signal)
+  await projectApi.getProjectResults('中 &/#', signal)
+  assert.equal(calls[2].url, '/project/get_progress?projectID=%E4%B8%AD%20%26%2F%23')
+  assert.equal(calls[3].url, '/project/get_results?projectID=%E4%B8%AD%20%26%2F%23')
+  assert.ok(calls.every(call => call.options.signal === signal))
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: '项目已存在' }), { status: 409 })
+  await assert.rejects(projectApi.createProject('p', '', signal), /项目已存在/)
+  globalThis.fetch = async () => new Response('Not Found', { status: 404 })
+  await assert.rejects(projectApi.getProjectProgress('p', signal), /HTTP 404/)
+})
+
+test('项目提交后串行查询，每 2 秒轮询，所有终态停止', async () => {
+  const clock = projectClock()
+  const { app, p } = mountedProject()
+  const calls = []
+  let status = 'running'
+  let inFlight = 0, maximum = 0
+  globalThis.fetch = async (url, options) => {
+    maximum = Math.max(maximum, ++inFlight)
+    calls.push(url)
+    await Promise.resolve()
+    inFlight--
+    if (url.endsWith('create_project')) {
+      assert.deepEqual(JSON.parse(options.body), { projectID: 'demo', prompt: '提示' })
+      return response({ projectID: 'demo', status: 'accepted' })
+    }
+    return response(url.includes('get_progress') ? projectProgress('demo', status) : projectResults('demo'))
+  }
+  try {
+    p.projectID.value = 'demo'; p.prompt.value = '提示'; p.submit()
+    await flushProject()
+    assert.deepEqual(calls, ['/project/create_project', '/project/get_progress?projectID=demo', '/project/get_results?projectID=demo'])
+    assert.equal(p.results.value.tasks[0].files[0].size, 12)
+    assert.equal(clock.timers.size, 1)
+    clock.tick(); await flushProject()
+    assert.equal(calls.length, 5)
+    assert.equal(maximum, 1)
+    for (const terminal of ['completed', 'failed', 'cancelled', 'empty']) {
+      status = terminal
+      p.query(); await flushProject()
+      assert.equal(p.progress.value.status, terminal)
+      assert.equal(p.polling.value, false)
+      assert.equal(clock.timers.size, 0)
+      const count = calls.length
+      clock.tick(); await flushProject()
+      assert.equal(calls.length, count)
+    }
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('换 ID 隔离迟到进度与结果，请求不重叠，卸载取消请求', async () => {
+  const clock = projectClock()
+  const { app, p } = mountedProject()
+  const oldProgress = deferred(), oldResults = deferred()
+  const calls = [], signals = []
+  globalThis.fetch = (url, options) => {
+    calls.push(url); signals.push(options.signal)
+    if (url.endsWith('projectID=A')) return oldProgress.promise
+    if (url.includes('get_results') && url.endsWith('projectID=B')) return oldResults.promise
+    const id = new URL(url, 'http://local').searchParams.get('projectID')
+    return Promise.resolve(response(url.includes('get_progress') ? projectProgress(id, 'completed') : projectResults(id)))
+  }
+  try {
+    p.projectID.value = 'A'; p.query()
+    p.projectID.value = 'B'; p.query()
+    assert.equal(signals[0].aborted, true)
+    assert.equal(calls.length, 1)
+    oldProgress.resolve(response(projectProgress('A')))
+    await flushProject()
+    assert.equal(p.progress.value.projectID, 'B')
+    assert.equal(calls.length, 3)
+    p.projectID.value = 'C'; p.query()
+    assert.equal(p.progress.value, null)
+    assert.equal(signals[2].aborted, true)
+    oldResults.resolve(response(projectResults('B')))
+    await flushProject()
+    assert.equal(p.progress.value.projectID, 'C')
+    assert.equal(p.results.value.projectID, 'C')
+    assert.equal(clock.timers.size, 0)
+    p.projectID.value = 'A'; p.query()
+    app.unmount()
+    assert.equal(signals.at(-1).aborted, true)
+    await flushProject()
+    assert.equal(clock.timers.size, 0)
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('隐藏时取消迟到响应，恢复续查；切换 ID 与卸载清理计时器', async () => {
+  const clock = projectClock()
+  const { app, p, active } = mountedProject()
+  const late = deferred()
+  let reads = 0
+  let signal
+  globalThis.fetch = async (url, options) => {
+    if (++reads === 1) { signal = options.signal; return late.promise }
+    return response(url.includes('get_progress') ? projectProgress('demo') : projectResults('demo'))
+  }
+  try {
+    p.projectID.value = 'demo'; p.query()
+    active.value = false
+    assert.equal(signal.aborted, true)
+    late.resolve(response(projectProgress('demo', 'failed')))
+    await flushProject()
+    assert.equal(p.progress.value, null)
+    assert.equal(reads, 1)
+    active.value = true; await flushProject()
+    assert.equal(p.progress.value.status, 'running')
+    assert.equal(clock.timers.size, 1)
+    active.value = false
+    assert.equal(clock.timers.size, 0)
+    active.value = true; await flushProject()
+    assert.equal(clock.timers.size, 1)
+    p.projectID.value = 'other'
+    assert.equal(clock.timers.size, 0)
+    assert.equal(p.polling.value, false)
+    p.query(); await flushProject()
+    app.unmount()
+    assert.equal(clock.timers.size, 0)
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('查询和提交错误停止轮询，可手动查询恢复', async () => {
+  const clock = projectClock()
+  const { app, p } = mountedProject()
+  let failure = 'create'
+  globalThis.fetch = async url => {
+    if (failure === 'create') return new Response(JSON.stringify({ detail: '项目已存在' }), { status: 409 })
+    if (url.includes('get_results') && failure === 'results') throw new Error('结果暂不可用')
+    if (failure === 'progress') return new Response(JSON.stringify({ detail: '未找到项目' }), { status: 404 })
+    return response(url.includes('get_progress') ? projectProgress('demo') : projectResults('demo'))
+  }
+  try {
+    p.submit(); assert.equal(p.error.value, '请输入项目 ID')
+    p.projectID.value = 'demo'; p.submit(); await flushProject()
+    assert.equal(p.error.value, '项目已存在')
+    for (const phase of ['progress', 'results']) {
+      failure = phase; p.query(); await flushProject()
+      assert.match(p.error.value, /未找到项目|结果暂不可用/)
+      assert.equal(p.polling.value, false)
+      assert.equal(clock.timers.size, 0)
+    }
+    failure = ''; p.query(); await flushProject()
+    assert.equal(p.error.value, '')
+    assert.equal(clock.timers.size, 1)
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('项目页切换保留单 IP 输入和订阅，显示下载并可查看任务', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}
+  globalThis.ShadowRoot = class {}
+  const streams = [], details = []
+  let listReads = 0
+  const task = id => ({ task_id: id, prompt: id, status: 'running' })
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === '/task/list_tasks') { listReads++; return response({ tasks: [task('A'), task('demo-task')] }) }
+    if (url.startsWith('/project/')) return response(url.includes('get_progress') ? projectProgress('demo', 'completed') : projectResults('demo'))
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/get_task')) { details.push(id); return response({ task: task(id), files: [] }) }
+    return new Response(new ReadableStream({ start(c) { streams.push({ id, c, signal: options.signal }) } }))
+  }
+  const rootElement = {}
+  const app = renderer.createApp(App)
+  app.mount(rootElement)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  const button = label => nodes().find(el => el.tag === 'button' && el.text === label)
+  try {
+    await waitFor(() => streams.length === 1)
+    const textarea = nodes().find(el => el.tag === 'textarea' && el.props.placeholder === '描述验证目标与约束…')
+    const taskInput = nodes().find(el => el.tag === 'input' && el.props.placeholder === '例如 attical-check-01')
+    textarea.props['onUpdate:modelValue']('保留单 IP 提示词')
+    taskInput.props['onUpdate:modelValue']('my-task')
+    await nextTick()
+    const workspace = nodes().find(el => el.props?.class === 'workspace')
+    const projectPanel = nodes().find(el => el.props?.class === 'project-panel')
+    button('项目验证').props.onClick(); await nextTick()
+    assert.equal(workspace.style.display, 'none')
+    assert.equal(projectPanel.style.display, undefined)
+    assert.equal(streams[0].signal.aborted, false)
+    nodes().find(el => el.props?.id === 'project-id').props['onUpdate:modelValue']('demo')
+    nodes().find(el => el.props?.id === 'project-prompt').props['onUpdate:modelValue']('项目提示词')
+    await nextTick()
+    button('查询已有项目').props.onClick()
+    await waitFor(() => nodes().some(el => el.tag === 'a' && el.props.href?.includes('/task/get_file')))
+    const download = nodes().find(el => el.tag === 'a' && el.props.href?.includes('/task/get_file'))
+    assert.equal(download.text, '报告 #.html')
+    assert.equal(download.props.href, projectResults('demo').tasks[0].files[0].download_url)
+    button('单 IP 验证').props.onClick(); await nextTick()
+    assert.equal(workspace.style.display, undefined)
+    assert.equal(streams[0].signal.aborted, false)
+    assert.equal(streams.length, 1)
+    assert.equal(textarea.value, '保留单 IP 提示词')
+    assert.equal(taskInput.value, 'my-task')
+    button('项目验证').props.onClick(); await nextTick()
+    assert.equal(nodes().find(el => el.props?.id === 'project-prompt').value, '项目提示词')
+    const previousLists = listReads
+    button('查看任务').props.onClick()
+    await waitFor(() => streams.length === 2)
+    await nextTick()
+    assert.equal(workspace.style.display, undefined)
+    assert.equal(details.at(-1), 'demo-task')
+    assert.ok(listReads > previousLists)
+    assert.equal(streams[0].signal.aborted, true)
+    assert.equal(textarea.value, '保留单 IP 提示词')
+  } finally {
+    app.unmount()
+    streams.forEach(stream => stream.c.close())
+    globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
 })

@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -7,6 +8,9 @@ from threading import Lock
 import anyio
 
 from . import config
+
+
+logger = logging.getLogger(__name__)
 
 
 class PiAgent:
@@ -30,6 +34,7 @@ class PiAgent:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         )
         self._write_lock = Lock()
+        logger.info('Pi 进程启动 pid=%s cwd=%s', self.process.pid, self.cwd)
 
     def __enter__(self):
         return self
@@ -57,6 +62,7 @@ class PiAgent:
             self.process.wait()
         self.process.stdin.close()
         self.process.stdout.close()
+        logger.info('Pi 进程已释放 pid=%s returncode=%s', self.process.pid, self.process.returncode)
 
     def send(self, jsonl: dict) -> None:
         with self._write_lock:

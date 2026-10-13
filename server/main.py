@@ -1,4 +1,6 @@
 import argparse
+import logging
+from time import perf_counter
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -8,14 +10,23 @@ from fastapi.staticfiles import StaticFiles
 
 from app.service import config
 from app.service.api import router as task_router
+from app.service.project_api import router as project_router
 from app.vip_task.task_manager import TaskManager
+from app.vip_task.project import ProjectManager
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.task_manager = TaskManager()
     try:
-        yield
+        app.state.project_manager = ProjectManager(app.state.task_manager)
+        try:
+            yield
+        finally:
+            await app.state.project_manager.close()
     finally:
         await app.state.task_manager.close()
 
@@ -23,6 +34,22 @@ async def lifespan(app: FastAPI):
 def create_app(backend_only: bool = False) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(task_router)
+    app.include_router(project_router)
+
+    @app.middleware('http')
+    async def log_request(request, call_next):
+        started = perf_counter()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            return response
+        finally:
+            # 不记录查询参数、请求正文及提示词。
+            logger.info('HTTP %s %s status=%s duration_ms=%.1f',
+                        request.method, request.url.path, status,
+                        (perf_counter() - started) * 1000)
+
     if not backend_only:
         app.mount("/", StaticFiles(directory=config.VIP_WEBUI_DIST_DIR, html=True))
     return app

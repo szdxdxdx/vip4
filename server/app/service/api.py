@@ -22,6 +22,10 @@ class TaskRequest(BaseModel):
 @router.post('/task/create_task', status_code=201)
 async def create_task(body: TaskRequest, request: Request):
     try:
+        # 项目映射永久保留，人工任务不得复用已经归属项目的 ID。
+        projects = getattr(request.app.state, 'project_manager', None)
+        if projects is not None and projects.store.has_task(body.task_id):
+            raise TaskExistsError('task_id 已归属项目，请使用新的任务 ID')
         return request.app.state.task_manager.create_task(body.task_id, body.prompt)
     except (TaskExistsError, TaskDeletingError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from None

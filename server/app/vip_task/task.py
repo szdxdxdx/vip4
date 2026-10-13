@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -52,6 +53,8 @@ class WorkspaceFile:
     attachment: bool = False
 
 
+logger = logging.getLogger(__name__)
+
 TASK_ID_PATTERN = r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$'
 
 
@@ -78,9 +81,10 @@ class Task:
         self.events: list[str] = []
         self.prompt: str = ''
         self.job: asyncio.Task | None = None
+        self.preparation: asyncio.Task | None = None
 
     @classmethod
-    def create(cls, task_id: str, prompt: str):
+    def create(cls, task_id: str, prompt: str, *, start: bool = True):
         # 初始化单任务目录与元数据，执行不依赖事件订阅。
         config.VIP_TASK_DIR.mkdir(parents=True, exist_ok=True)
         task_dir = config.VIP_TASK_DIR / task_id
@@ -91,7 +95,7 @@ class Task:
 
         session_dir = task_dir / 'pi_session'
         workspace = task_dir / 'workspace'
-        for directory in (session_dir, workspace):
+        for directory in (session_dir, workspace, task_dir / 'input'):
             directory.mkdir()
 
         metadata = {
@@ -102,11 +106,16 @@ class Task:
         _write_metadata(task_dir / 'task.json', metadata)
         (task_dir / '.gitignore').write_text('*\n', encoding='utf-8')
 
-        agent_prompt = f'/skill:verify-ip 工作目录为 {workspace}\n\n{prompt}'
         task = cls(task_id)
         task.prompt = prompt
-        task.job = asyncio.create_task(task.async_run(agent_prompt))
+        logger.info('任务已创建 task_id=%s', task_id)
+        if start:
+            task.job = asyncio.create_task(task.run())
         return task
+
+    async def run(self):
+        workspace = self.task_dir / 'workspace'
+        await self.async_run(f'/skill:verify-ip 工作目录为 {workspace}\n\n{self.prompt}')
 
     @staticmethod
     def _task_dir(task_id: str) -> Path:
@@ -273,7 +282,7 @@ class Task:
     def get_prompt(self) -> str:
         if self.job is not None and not self.job.done():
             return self.prompt
-        return self.read_history().prompt
+        return self.prompt or self.read_history().prompt
 
     def get_events(self):
         self._task_dir(self.task_id)
@@ -329,7 +338,7 @@ class Task:
                 '--append-system-prompt', (
                     f'本轮软件 IP 验证工作目录只能是 {cwd}。'
                     f'所有输出和临时文件写入该目录，临时文件放在 {tmp_dir}。'
-                    f'输入数据 {config.VIP_DATASET_DIR} 只读；'
+                    f'输入数据 {config.VIP_DATASET_DIR}、{self.task_dir / "input"} 和 {self.task_dir / "files.csv"} 只读；'
                     f'允许读取 {config.VIP_SKILL_DIR} 中的 SKILL、参考文档，执行其脚本与已准备的虚拟环境。'
                     '不得读写其他任务或未指定的数据目录，不得修改原始 IP、SKILL 或全局环境。'
                     '按用户指定 SKILL 执行完整流程，不限制工具调用次数。'
@@ -368,8 +377,10 @@ class Task:
                     if event.get("type") == "agent_settled":
                         return
         except TimeoutError:
+            logger.exception('Pi 超时 task_id=%s', self.task_id)
             yield {"type": "error", "error": "LLM 回复超时"}
         except (OSError, RuntimeError, ValueError):
+            logger.exception('Pi 调用失败 task_id=%s', self.task_id)
             yield {"type": "error", "error": "Pi 调用失败，请检查模型配置"}
 
     async def async_run(self, prompt: str):
@@ -377,6 +388,7 @@ class Task:
         task_dir = self.task_dir
         metadata_file = task_dir / 'task.json'
         metadata = json.loads(metadata_file.read_text(encoding='utf-8'))
+        logger.info('开始验证 task_id=%s', self.task_id)
         metadata['status'] = 'running'
         _write_metadata(metadata_file, metadata)
         status = 'completed'
@@ -406,9 +418,11 @@ class Task:
             write({'type': 'error', 'error': '服务关闭，任务已取消'})
             raise
         except Exception:
+            logger.exception('验证异常 task_id=%s', self.task_id)
             status = 'failed'
             write({'type': 'error', 'error': '任务执行失败'})
         finally:
             metadata['status'] = status
             _write_metadata(metadata_file, metadata)
+            logger.info('验证结束 task_id=%s status=%s', self.task_id, status)
 
