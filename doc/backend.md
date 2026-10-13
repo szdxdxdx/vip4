@@ -30,6 +30,14 @@
 
 所有 IP 完成准备后才开始验证。单条输入准备失败标记 failed，其他 IP 继续。项目任务通过 TaskManager 与手动任务共用串行锁；删除单个运行任务不会跳过剩余任务。输入收集属于任务生命周期，删除会先等待收集线程退出，再删除整个目录，避免复制与删除并行。默认提示词要求使用 verify-ip SKILL 和 CBMC，明确 input、files.csv 位置，报告、驱动及配置遵循 SKILL 的目录约定。可选 prompt 作为附加要求。
 
+## 课题三产物
+
+课题三服务地址通过 `VIP_KETI3_BASE_URL` 配置，例如 `http://课题三主机:50053`（不要包含 `/api`）。前端选择“课题三”，输入正整数 projectID；API 提交 `{ "projectID": "1001", "source": "keti3" }`。省略 source 仍使用课题二。课题三调用 `POST /api/verify`、正文 `{ "project_id": "1001" }` 打包已存在的最新合成产物，再 GET 返回的 zip_url 下载；不调用 `/api/synthesize`，也不自行拼接远端目录。服务地址未配置、没有产物或打包失败会显示项目错误。
+
+每个课题三项目只创建一个自动分配 ID 的任务，业务标识为 `keti3:<projectID>`。原 ZIP 保留为任务根目录 `keti3.zip`，全部文件按原目录结构解压到 input，不按课题二字段筛选，也不转换文件编码；files.csv 记录 ZIP 和每个解压文件的来源及绝对保存路径。拒绝路径穿越、符号链接、特殊文件、重复路径和覆盖已有文件；下载上限 256 MiB，解压上限 1 GiB，条目上限 10000。输入完整准备成功后才启动验证，失败不会启动 Pi。
+
+默认提示词将整个产物视为一个特殊 IP：IR 是形式模型，产物最外层的 .c/.h 是主代码，iplib 等子目录为依赖；ZIP 包装目录保留，由 agent 确定实际产物根目录。GBK/gb18030 文件保持原始字节，需要转换时只在 workspace 中复制处理。课题三规范的 `/api/verify` 描述为打包 DIST；如果实际 ZIP 未包含 IR，vip4 无法获取目录外的模型，agent 必须明确报告模型缺失，不得宣称已经证明符合未提供的规约。
+
 ## 任务对话
 
 单个任务对应一个持久 Pi 会话。`POST /task/send_message` 接收 `{task_id,message}`，返回 HTTP 202、`{task_id,status}`；运行中发送的消息作为后续补充排队，轮次结束后继续对话。已结束或暂停的任务重新进入全局串行队列，显式加载本任务的会话文件恢复上下文，不读取其他任务的会话。输入准备期间不接受对话。
@@ -50,11 +58,13 @@
 | `VIP_SOURCE_PATH_MAP` | `{}`，JSON 路径前缀到本机目录的映射；优先匹配最长前缀，拒绝越界 |
 | `VIP_SOURCE_DOWNLOAD_URL` | `http://8.130.30.48:8877/api/file/downloadFile`，课题二 POST 下载接口；设为空字符串可禁用路径下载，仅使用本机文件或直接 URL |
 | `VIP_SOURCE_TIMEOUT` | `30`，网络请求超时秒数 |
+| `VIP_KETI3_BASE_URL` | 空，课题三服务根地址，使用课题三前必须配置 |
+| `VIP_KETI3_TIMEOUT` | `120`，课题三打包和下载请求超时秒数 |
 | `VIP_PROJECT_DB` | 项目根目录 `projects.sqlite3`，SQLite 文件位置 |
 
 例如，`VIP_SOURCE_PATH_MAP='{"/uploads":"/data/uploads"}'` 将远端返回的 `/uploads/ip.c` 映射到 `/data/uploads/ip.c`。如需切换文件服务地址，设置 `VIP_SOURCE_DOWNLOAD_URL`；服务应接收上述 POST JSON 正文并返回文件字节流。
 
-SQLite 保存 task_id、projectID 和 ip_id。ip_id 只取 `ipMsg.entity.basicInformation.id`（如 `B_TcProcess`），不同于数字 `ipId`，不保存 basicInformation 的 name 或其他字段；项目进度及结果列表均返回该标识，普通任务删除后仍保留归属和标识，强制提交会删除旧项目的所有映射。缺失或非字符串 id 记录为空字符串，不影响验证。
+SQLite 保存 task_id、projectID 和 ip_id。ip_id 只取 `ipMsg.entity.basicInformation.id`（如 `B_TcProcess`），不同于数字 `ipId`，不保存 basicInformation 的 name 或其他字段；项目进度及结果列表均返回该标识，普通任务删除后仍保留归属和标识，项目删除或强制提交会删除旧项目的所有映射。缺失或非字符串 id 记录为空字符串，不影响验证。
 
 已有数据库启动时自动补充 ip_id 列，历史记录保留；历史任务未保存过该字段，值为空，页面显示“未提供 IP 标识”，不推测或重新查询补齐。数据库不保存项目状态、提示词或输入。重启后可通过映射查询历史任务及结果；TaskManager 将未完成的 created/queued/running 任务落盘为 cancelled，不自动恢复执行。正常关闭时先等待已接受的删除或 force 清理，再取消项目编排及剩余准备任务、释放任务资源并关闭 SQLite；关闭期间不启动新的项目验证。空项目或查询失败且尚未生成映射的项目只在内存中存在，重启后不可查询或保留重复提交限制。
 
