@@ -12,10 +12,10 @@ async function request<T>(url: string, options: RequestInit): Promise<T> {
   }
   return response.json()
 }
-export function createProject(projectID: string, prompt: string, signal: AbortSignal) {
+export function createProject(projectID: string, prompt: string, signal: AbortSignal, force = false) {
   return request<{ projectID: string; status: 'accepted' }>('/project/create_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, ...(prompt.trim() ? { prompt } : {}) }),
+    body: JSON.stringify({ projectID, ...(force ? { force: true } : {}), ...(prompt.trim() ? { prompt } : {}) }),
   })
 }
 export function getProjectProgress(id: string, signal: AbortSignal) {

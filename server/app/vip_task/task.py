@@ -1,20 +1,22 @@
 import asyncio
+import errno
 import json
 import logging
 import mimetypes
 import os
 import re
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass
-from contextlib import aclosing
+from contextlib import aclosing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
 from ..agent import config as agent_config
 from ..agent.pi import PiAgent
-from .pi_session import read_history
+from .pi_session import read_history, prompt_key
 
 
 class TaskExistsError(Exception):
@@ -22,6 +24,10 @@ class TaskExistsError(Exception):
 
 
 class TaskNotFoundError(Exception):
+    pass
+
+
+class TaskConflictError(Exception):
     pass
 
 
@@ -82,6 +88,80 @@ class Task:
         self.prompt: str = ''
         self.job: asyncio.Task | None = None
         self.preparation: asyncio.Task | None = None
+        self.agent = None
+        self.control_lock = asyncio.Lock()
+        self.pausing = False
+        self.chat_mode = False
+        self.pending = []
+        self.inflight = []
+        self.unconfirmed_prompt = None
+        self.turn_id = 0
+        try:
+            with self._journal() as source:
+                self.events = source.readlines()
+        except FileNotFoundError:
+            pass
+        try:
+            records = [json.loads(line) for line in self.events]
+            if any(not isinstance(record, dict) or type(record.get('turn_id', 0)) is not int
+                   or record.get('turn_id', 0) < 0 for record in records):
+                raise ValueError('事件格式错误')
+            self.turn_id = max((record.get('turn_id', 0) for record in records), default=0)
+        except (ValueError, UnicodeError):
+            raise TaskMetadataError('任务对话记录损坏') from None
+
+    @contextmanager
+    def _journal(self, *, write=False):
+        # 目录句柄固定任务边界，拒绝符号链接及 FIFO 等非普通文件。
+        directory_fd = descriptor = None
+        try:
+            directory_fd = os.open(self._task_dir(self.task_id),
+                                   os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT) if write else os.O_RDONLY
+            descriptor = os.open('chat_events.jsonl', flags | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 0o600, dir_fd=directory_fd)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise TaskPathError('对话记录必须为普通文件')
+            output = os.fdopen(descriptor, 'a' if write else 'r', encoding='utf-8')
+            descriptor = None
+            with output:
+                yield output
+        except OSError as error:
+            if error.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENXIO):
+                raise TaskPathError('不允许对话记录符号链接或特殊文件') from None
+            raise
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if directory_fd is not None:
+                os.close(directory_fd)
+
+    def write_event(self, event):
+        event = {**event, 'turn_id': self.turn_id, 'event_id': len(self.events) + 1}
+        line = json.dumps(event, ensure_ascii=False) + '\n'
+        with self._journal(write=True) as output:
+            output.write(line)
+        self.events.append(line)
+
+    def confirm_user(self, content):
+        key = prompt_key(content)
+        if self.unconfirmed_prompt is not None and key == self.unconfirmed_prompt:
+            # 首条 prompt 与同文 followUp 分开确认，不能一次删掉两条。
+            self.unconfirmed_prompt = None
+            self.inflight = []
+            return
+        for index, message in enumerate(self.pending):
+            if prompt_key(message) == key:
+                self.pending.pop(index)
+                return
+
+    def set_status(self, status):
+        path = self.task_dir / 'task.json'
+        metadata = json.loads(path.read_text(encoding='utf-8'))
+        metadata['status'] = status
+        metadata['chatstatus'] = status
+        metadata['turn_id'] = self.turn_id
+        _write_metadata(path, metadata)
 
     @classmethod
     def create(cls, task_id: str, prompt: str, *, start: bool = True):
@@ -115,7 +195,7 @@ class Task:
 
     async def run(self):
         workspace = self.task_dir / 'workspace'
-        await self.async_run(f'/skill:verify-ip 工作目录为 {workspace}\n\n{self.prompt}')
+        await self.async_run(f'/skill:verify-ip 工作目录为 {workspace}\n\n{self.get_prompt()}')
 
     @staticmethod
     def _task_dir(task_id: str) -> Path:
@@ -214,9 +294,16 @@ class Task:
             for key in ('status', 'created_at')
         ):
             raise TaskMetadataError('任务元数据格式错误')
+        if any(key in metadata and not isinstance(metadata[key], str)
+               for key in ('chatstatus', 'verification_status')) or (
+            'turn_id' in metadata and (type(metadata['turn_id']) is not int or metadata['turn_id'] < 0)
+        ):
+            raise TaskMetadataError('任务聊天元数据格式错误')
         task = {'task_id': task_dir.name, **{
-            key: metadata[key] for key in ('status', 'created_at')
+            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id') if key in metadata
         }}
+        task.setdefault('chatstatus', task['status'])
+        task.setdefault('turn_id', 0)
         if isinstance(metadata.get('reports'), list):
             reports = []
             for report in metadata['reports']:
@@ -280,31 +367,32 @@ class Task:
                             config.VIP_SKILL_DIR / 'verify-ip' / 'SKILL.md')
 
     def get_prompt(self) -> str:
-        if self.job is not None and not self.job.done():
+        if self.job is not None and not self.job.done() and self.prompt:
             return self.prompt
-        return self.prompt or self.read_history().prompt
+        if self.prompt:
+            return self.prompt
+        prompt = self.read_history().prompt
+        if not prompt:
+            prompt = next((json.loads(line).get('message', '') for line in self.events
+                           if json.loads(line).get('type') == 'user'), '')
+        return prompt
 
     def get_events(self):
         self._task_dir(self.task_id)
-        live = self.job is not None and not self.job.done()
-
         async def stream():
-            # 订阅开始时固定来源，运行结束后只排空内存，不拼接历史。
-            if not live:
+            index = 0
+            if not self.events:
                 for event in self.read_history().events:
                     yield json.dumps(event, ensure_ascii=False) + '\n'
-                return
-            index = 0
             while True:
                 if index < len(self.events):
                     line = self.events[index]
                     index += 1
                     yield line
-                elif self.job is None or self.job.done():
+                elif (self.job is None or self.job.done()) and not self.pausing:
                     return
                 else:
                     await asyncio.sleep(config.EVENT_POLL_INTERVAL)
-
         return stream()
 
     def _create_agent(self) -> PiAgent:
@@ -316,8 +404,10 @@ class Task:
             or not cwd.is_dir()
         ):
             raise ValueError('Agent 工作目录必须是 tasks/<task_id>/workspace/')
-        session_dir = (cwd.parent / 'pi_session').resolve()
-        session_dir.mkdir(parents=True, exist_ok=True)
+        session_dir = self._task_dir(self.task_id) / 'pi_session'
+        if session_dir.is_symlink():
+            raise TaskPathError('不允许 Pi 会话目录符号链接')
+        session_dir.mkdir(exist_ok=True)
         tmp_dir = cwd / 'tmp'
         tmp_dir.mkdir(exist_ok=True)
 
@@ -328,6 +418,7 @@ class Task:
             argv=[
                 agent_config.PI_EXECUTABLE,
                 '--mode', 'rpc',
+                '--session', str(self.session_path()),
                 '--tools', config.PI_TOOLS,
                 '--no-extensions',
                 '--no-approve',
@@ -343,7 +434,7 @@ class Task:
                     '不得读写其他任务或未指定的数据目录，不得修改原始 IP、SKILL 或全局环境。'
                     '按用户指定 SKILL 执行完整流程，不限制工具调用次数。'
                     '只有最终验证报告生成后才算任务完成，不得捏造工具结果。'
-                    '完成任务后最终回复必须且只能是【任务已完成】，不得附带摘要、报告路径或其他文字。'
+                    '普通补充聊天按用户问题正常回答，不要求生成报告。'
                     '若未完成或遇到无法继续的问题，必须如实说明，禁止回复【任务已完成】。'
                 ),
             ],
@@ -356,32 +447,82 @@ class Task:
             },
         )
 
+    def session_path(self):
+        directory = self._task_dir(self.task_id) / 'pi_session'
+        if directory.is_symlink():
+            raise TaskPathError('不允许 Pi 会话目录符号链接')
+        fixed = directory / 'conversation.jsonl'
+        if fixed.is_symlink():
+            raise TaskPathError('不允许 Pi 会话文件符号链接')
+        if fixed.is_file() and not fixed.is_symlink():
+            return fixed
+        files = [file for file in directory.glob('*.jsonl') if not file.is_symlink() and file.is_file()]
+        # 始终显式打开本任务文件；首次启动指定固定文件，不搜索全局会话。
+        return max(files, key=lambda file: file.stat().st_mtime_ns) if files else fixed
+
     async def _agent_events(self, prompt: str):
-        # 按原完成信号等待回复，并把调用异常转成既有事件文本。
+        agent = None
         try:
-            async with self._create_agent() as agent, asyncio.timeout(config.PI_TIMEOUT):
-                await asyncio.to_thread(agent.send_prompt, prompt)
+            agent = self._create_agent()
+            self.agent = agent
+            await agent.start_reader()
+            async with asyncio.timeout(config.PI_TIMEOUT):
+                self.unconfirmed_prompt = prompt_key(prompt)
+                result = await agent.rpc('prompt', message=prompt)
+                if result.get('disposition') == 'handled':
+                    self.inflight = []
+                    self.unconfirmed_prompt = None
+                    return
                 message = {}
                 while True:
-                    event = await asyncio.to_thread(agent.receive)
-                    if event.get("type") == "response" and event.get("command") == "prompt":
-                        if not event.get("success") or event.get("data", {}).get("disposition") == "handled":
-                            raise RuntimeError("Pi 未接受对话请求")
-                    elif event.get("type") == "message_end":
-                        if event["message"].get("role") == "assistant":
-                            message = event["message"]
-                    elif event.get("type") == "agent_settled":
-                        if event.get("aborted") or message.get("stopReason") not in ("stop", "length"):
-                            raise RuntimeError("Pi 未能生成回复")
-                    yield event
-                    if event.get("type") == "agent_settled":
+                    event = await agent.events.get()
+                    if event.get('type') == 'message_start' and event.get('message', {}).get('role') == 'user':
+                        self.confirm_user(event['message'].get('content'))
+                    if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant':
+                        message = event['message']
+                    if event.get('type') == 'agent_settled':
+                        # prompt 与旧 settled 交错时，先等发送响应并核实当前会话空闲。
+                        async with self.control_lock:
+                            state = await agent.rpc('get_state')
+                            if state.get('isStreaming') or state.get('isCompacting') or state.get('pendingMessageCount', 0):
+                                agent.settled = False
+                                yield event
+                                continue
+                            agent.settled = True
+                        if not self.pausing and (event.get('aborted') or message.get('stopReason') not in ('stop', 'length')):
+                            yield {'type': 'error', 'error': 'Pi 未能生成回复'}
+                        yield event
                         return
-        except TimeoutError:
-            logger.exception('Pi 超时 task_id=%s', self.task_id)
-            yield {"type": "error", "error": "LLM 回复超时"}
-        except (OSError, RuntimeError, ValueError):
+                    yield event
+                    if event.get('type') == 'error':
+                        return
+        except (TimeoutError, OSError, RuntimeError, ValueError):
             logger.exception('Pi 调用失败 task_id=%s', self.task_id)
-            yield {"type": "error", "error": "Pi 调用失败，请检查模型配置"}
+            yield {'type': 'error', 'error': 'Pi 调用失败或超时'}
+        finally:
+            if agent is not None:
+                # 取消也须等待 abort 和进程释放后才能释放全局资源锁。
+                async def cleanup():
+                    try:
+                        if not agent.settled:
+                            await agent.abort()
+                    finally:
+                        await agent.stop_reader()
+                        # abort 期间消费的用户记录也要确认，避免继续时重复送入上下文。
+                        while not agent.events.empty():
+                            event = agent.events.get_nowait()
+                            if event.get('type') == 'message_start' and event.get('message', {}).get('role') == 'user':
+                                self.confirm_user(event['message'].get('content'))
+                            elif event.get('message', {}).get('role') != 'user':
+                                self.write_event({'type': 'agent', 'data': event})
+                operation = asyncio.create_task(cleanup())
+                try:
+                    await asyncio.shield(operation)
+                except asyncio.CancelledError:
+                    await operation
+                    raise
+                finally:
+                    self.agent = None
 
     async def async_run(self, prompt: str):
         # 后台执行、内存事件与报告完成门槛属于单任务生命周期。
@@ -389,40 +530,64 @@ class Task:
         metadata_file = task_dir / 'task.json'
         metadata = json.loads(metadata_file.read_text(encoding='utf-8'))
         logger.info('开始验证 task_id=%s', self.task_id)
+        if not self.chat_mode:
+            metadata['reports'] = []
         metadata['status'] = 'running'
+        metadata['chatstatus'] = 'running'
+        metadata['turn_id'] = self.turn_id
         _write_metadata(metadata_file, metadata)
-        status = 'completed'
-        def write(event):
-            self.events.append(json.dumps(event, ensure_ascii=False) + '\n')
+        status = 'idle' if self.chat_mode else 'completed'
+        report_attempt = False
+        before = {str(p): (p.stat().st_mtime_ns, p.stat().st_size)
+                  for p in (task_dir / 'workspace').glob('*_suite/output/report.*')}
+        write = self.write_event
+        if not self.chat_mode and not self.events:
+            write({'type': 'user', 'message': self.prompt})
 
         try:
             async with aclosing(self._agent_events(prompt)) as events:
                 async for event in events:
-                    write({'type': 'agent', 'data': event})
+                    if event.get('message', {}).get('role') != 'user':
+                        write({'type': 'agent', 'data': event})
                     if event.get('type') == 'error':
                         status = 'failed'
-            if status == 'completed':
+            if status != 'failed':
+                self.inflight = []
+            if status in ('completed', 'idle'):
                 reports = []
                 workspace = task_dir / 'workspace'
                 for report in workspace.glob('*_suite/output/report.json'):
                     html = report.with_suffix('.html')
-                    if html.is_file() and html.stat().st_size:
+                    if html.is_file() and html.stat().st_size and (
+                        before.get(str(report)) != (report.stat().st_mtime_ns, report.stat().st_size)
+                        or before.get(str(html)) != (html.stat().st_mtime_ns, html.stat().st_size)
+                    ):
+                        report_attempt = True
                         json.loads(report.read_text(encoding='utf-8'))
                         reports.append(str(report.relative_to(workspace)))
-                if not reports:
+                if reports:
+                    status = 'completed'
+                    metadata['reports'] = reports
+                elif not self.chat_mode:
                     status = 'failed'
                     write({'type': 'error', 'error': 'Agent 已停止，但未生成最终验证报告，任务未完成'})
-                metadata['reports'] = reports
         except asyncio.CancelledError:
-            status = 'cancelled'
-            write({'type': 'error', 'error': '服务关闭，任务已取消'})
+            status = 'paused' if self.pausing else 'cancelled'
+            if not self.pausing:
+                write({'type': 'error', 'error': '服务关闭，任务已取消'})
             raise
         except Exception:
             logger.exception('验证异常 task_id=%s', self.task_id)
-            status = 'failed'
-            write({'type': 'error', 'error': '任务执行失败'})
+            status = 'paused' if self.pausing else 'failed'
+            if not self.pausing:
+                write({'type': 'error', 'error': '任务执行失败'})
         finally:
             metadata['status'] = status
+            metadata['chatstatus'] = status
+            metadata['turn_id'] = self.turn_id
+            if not self.chat_mode or status == 'completed' or report_attempt:
+                metadata['verification_status'] = status
             _write_metadata(metadata_file, metadata)
+            write({'type': 'status', 'status': status})
             logger.info('验证结束 task_id=%s status=%s', self.task_id, status)
 

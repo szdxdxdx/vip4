@@ -1,8 +1,28 @@
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def message_text(content) -> str:
+    # RPC user 内容既可为字符串，也可为 text/image 内容块。
+    if isinstance(content, str):
+        return content
+    return ''.join(block.get('text', '') for block in content
+                   if isinstance(block, dict) and block.get('type') == 'text'
+                   and isinstance(block.get('text'), str)) if isinstance(content, list) else ''
+
+
+def prompt_key(content) -> str:
+    text = message_text(content)
+    skill = re.match(r'<skill name="([^"]+)" location="[^"]*">\n', text)
+    if skill:
+        end = text.rfind('\n</skill>\n\n')
+        if end != -1:
+            text = '/skill:' + skill[1] + ' ' + text[end + len('\n</skill>\n\n'):]
+    return text.strip()
 
 
 @dataclass
@@ -88,6 +108,9 @@ def read_history(task_dir: Path, skill_file: Path) -> SessionHistory:
                 if text.startswith(workspace_prefix):
                     text = text[len(workspace_prefix):]
                 history.prompt = text
+                history.events.append({'type': 'user', 'message': text})
+            elif role == 'user':
+                history.events.append({'type': 'user', 'message': message_text(content)})
             elif role == 'assistant':
                 history.events.append({'type': 'agent', 'data': {
                     'type': 'message_end', 'message': message,

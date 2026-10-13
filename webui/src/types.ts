@@ -3,6 +3,9 @@ export interface Task {
   prompt: string
   status: string
   created_at: string
+  turn_id?: number
+  chatstatus?: string
+  verification_status?: string
   reports?: string[]
 }
 export interface Artifact { path: string; size: number; kind: 'report_html' | 'report_json' | 'file' }
@@ -11,6 +14,8 @@ export interface ChatMessage {
   id: string
   kind: 'user' | 'assistant' | 'tool' | 'error'
   text: string
+  turnId?: number
+  userSource?: 'fallback' | 'explicit' | 'legacy'
   thinking?: string
   toolCallId?: string
   toolName?: string
@@ -20,11 +25,15 @@ export interface ChatMessage {
 }
 export interface ConversationState {
   items: ChatMessage[]
-  activeAssistant: string | null
   nextId: number
+  seenEvents: Set<number>
+  assistants: Record<string, string | null>
+  activeUser: string | null
+  userCount: number
+  legacyFirstSeen: boolean
 }
-export type TaskEvent = { type: 'agent'; data: Record<string, unknown> } | { type: 'error'; error: unknown }
-export const isTerminal = (status: string) => ['completed', 'failed', 'error', 'cancelled', 'canceled', 'done', 'finished'].includes(status)
+export type TaskEvent = ({ type: 'agent'; data: Record<string, unknown> } | { type: 'error'; error: unknown } | { type: 'user'; message: unknown } | { type: 'status'; status: string }) & { turn_id?: number; event_id?: number }
+export const isTerminal = (status: string) => ['idle', 'paused', 'completed', 'failed', 'error', 'cancelled', 'canceled', 'done', 'finished'].includes(status)
 export function statusLabel(status: string) {
-  return ({ created: '已创建', queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', error: '错误', cancelled: '已取消', done: '已完成', finished: '已完成' } as Record<string, string>)[status] || status || '未知'
+  return ({ idle: '对话结束', paused: '已暂停', created: '已创建', queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', error: '错误', cancelled: '已取消', done: '已完成', finished: '已完成' } as Record<string, string>)[status] || status || '未知'
 }

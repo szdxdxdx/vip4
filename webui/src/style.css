@@ -843,3 +843,8 @@ iframe {
   .app-header { flex-wrap:wrap; gap:8px }
   .project-panel { grid-template-columns:minmax(0,1fr) }
 }
+
+.chat-input { flex-shrink: 0; padding: 12px 18px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.chat-input textarea { width: 100%; resize: vertical; min-height: 64px; }
+.chat-actions { display: flex; gap: 8px; align-items: center; }
+.chat-actions .muted { flex: 1; }

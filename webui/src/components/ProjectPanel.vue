@@ -3,8 +3,8 @@ import { toRef } from 'vue'
 import { useProject } from '../composables/useProject'
 import { projectLabels } from '../projectTypes'
 const props = defineProps<{ active: boolean }>()
-const emit = defineEmits<{ viewTask: [id: string] }>()
-const { projectID, prompt, progress, results, error, busy, polling, submit, query } = useProject(toRef(props, 'active'))
+const emit = defineEmits<{ viewTask: [id: string]; forced: [] }>()
+const { projectID, prompt, progress, results, error, busy, polling, submit, forceSubmit, query } = useProject(toRef(props, 'active'), () => emit('forced'))
 </script>
 <template>
   <main class="project-panel" aria-label="项目验证">
@@ -15,9 +15,10 @@ const { projectID, prompt, progress, results, error, busy, polling, submit, quer
         <input id="project-id" v-model="projectID" autocomplete="off" placeholder="输入项目 ID" />
         <label for="project-prompt">提示词（可选）</label>
         <textarea id="project-prompt" v-model="prompt" rows="5" placeholder="留空使用后端默认 CBMC 验证提示词" />
-        <p class="project-hint">同一项目不可重复提交；已有项目请直接查询。</p>
+        <p class="project-hint">普通提交不覆盖已有项目；强制提交会永久删除旧任务。</p>
         <div class="project-actions">
           <button type="submit" :disabled="busy || !projectID.trim()">提交验证</button>
+          <button type="button" :disabled="busy || !projectID.trim()" @click="forceSubmit">强制提交验证</button>
           <button type="button" :disabled="busy || !projectID.trim()" @click="query">查询已有项目</button>
         </div>
       </form>
@@ -35,10 +36,11 @@ const { projectID, prompt, progress, results, error, busy, polling, submit, quer
         <p v-if="!progress.tasks.length" class="project-hint">暂无任务</p>
         <article v-for="task in progress.tasks" :key="task.task_id" class="project-task">
           <div class="project-summary">
-            <h3>{{ task.task_id }}</h3>
+            <h3>{{ task.ip_id || '未提供 IP 标识' }}</h3>
             <span>{{ projectLabels[task.status] }}</span>
             <button type="button" @click="emit('viewTask', task.task_id)">查看任务</button>
           </div>
+          <p class="project-hint">任务ID：{{ task.task_id }}</p>
           <p v-if="task.created_at" class="project-hint">创建时间：{{ task.created_at }}</p>
           <ul v-if="results?.tasks.find(item => item.task_id === task.task_id)?.files.length" class="project-files">
             <li v-for="file in results?.tasks.find(item => item.task_id === task.task_id)?.files" :key="file.path">

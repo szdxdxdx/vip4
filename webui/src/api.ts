@@ -56,3 +56,14 @@ export async function streamTask(id: string, signal: AbortSignal, onEvent: (even
     reader.releaseLock()
   }
 }
+
+export async function sendMessage(id: string, message: string): Promise<{ task_id: string; status: string }> {
+  return (await checked(await fetch('/task/send_message', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: id, message }),
+  }))).json()
+}
+export async function pauseTask(id: string): Promise<{ task_id: string; status: string }> {
+  return (await checked(await fetch('/task/pause_task', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: id }),
+  }))).json()
+}

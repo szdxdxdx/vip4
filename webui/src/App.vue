@@ -9,7 +9,8 @@ import ProjectPanel from './components/ProjectPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
   listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
-  submit, initialize, refreshSelected } = useWorkbench()
+  draft, chatBusy, chatError, canSend, canPause, sendMessage, pauseTask,
+  submit, initialize, resetHistory, refreshSelected } = useWorkbench()
 const mode = ref<'single' | 'project'>('single')
 function viewProjectTask(id: string) {
   mode.value = 'single'
@@ -47,7 +48,9 @@ onMounted(initialize)
           v-show="activeView === 'conversation'" :active="mode === 'single' && activeView === 'conversation'"
           :task="task" :selected-id="selectedId" :messages="messages"
           :loading="detailLoading" :error="detailError" :stream-error="streamError"
-          :stream-state="streamState" @replay="selectTask(selectedId)"
+          :stream-state="streamState" v-model:draft="draft" :chat-busy="chatBusy" :chat-error="chatError"
+          :can-send="canSend" :can-pause="canPause" :deleting="deletingId === selectedId && !!selectedId"
+          @send="sendMessage" @pause="pauseTask" @replay="selectTask(selectedId)"
         />
         <ProgressPanel
           v-if="activeView === 'progress'" :task="task" :selected-id="selectedId"
@@ -71,6 +74,6 @@ onMounted(initialize)
         </nav>
       </aside>
     </main>
-    <ProjectPanel v-show="mode === 'project'" :active="mode === 'project'" @view-task="viewProjectTask" />
+    <ProjectPanel v-show="mode === 'project'" :active="mode === 'project'" @view-task="viewProjectTask" @forced="resetHistory" />
   </div>
 </template>

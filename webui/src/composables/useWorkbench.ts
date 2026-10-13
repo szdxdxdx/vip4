@@ -21,6 +21,25 @@ export function useWorkbench() {
   const creating = ref(false)
   const deletingId = ref('')
   const deleteError = ref('')
+  const drafts = ref<Record<string, string>>({})
+  const draftVersions: Record<string, number> = {}
+  const chatBusy = ref<'send' | 'pause' | ''>('')
+  const chatError = ref('')
+  const draft = computed({
+    get: () => drafts.value[selectedId.value] || '',
+    set: value => {
+      const id = selectedId.value
+      if (!id) return
+      drafts.value[id] = value
+      draftVersions[id] = (draftVersions[id] || 0) + 1
+    },
+  })
+  const canChat = computed(() => !!task.value && !!selectedId.value && !detailLoading.value &&
+    selectedId.value !== deletingId.value && !chatBusy.value && task.value.status !== 'created')
+  const canSend = computed(() => canChat.value && !!draft.value.trim())
+  const canPause = computed(() => canChat.value && ['queued', 'running'].includes(task.value!.status))
+  let statusRevision = 0
+  let latestStatusEvent = -1
   const deletedIds = new Set<string>()
   let generation = 0
   let listGeneration = 0
@@ -47,8 +66,10 @@ export function useWorkbench() {
     } finally { if (revision === listGeneration) listLoading.value = false }
   }
   async function refreshDetail(id: string, version: number, signal: AbortSignal) {
+    const revision = statusRevision
     const result = await api.getTask(id, signal)
-    if (version !== generation || signal.aborted) return false
+    if (version !== generation || signal.aborted || revision !== statusRevision ||
+      (result.task.turn_id ?? 0) < (task.value?.turn_id ?? 0)) return false
     task.value = result.task
     files.value = result.files
     detailError.value = ''
@@ -75,6 +96,10 @@ export function useWorkbench() {
     const current = new AbortController()
     controller = current
     const version = ++generation
+    chatBusy.value = ''
+    chatError.value = ''
+    statusRevision++
+    latestStatusEvent = -1
     selectedId.value = id
     task.value = null
     files.value = []
@@ -101,7 +126,18 @@ export function useWorkbench() {
       await api.streamTask(id, current.signal, event => {
         if (version !== generation || current.signal.aborted) return
         streamState.value = 'live'
+        if (event.event_id !== undefined && conversation.value.seenEvents.has(event.event_id)) return
         applyTaskEvent(conversation.value, event)
+        if (task.value && event.turn_id !== undefined && event.turn_id > (task.value.turn_id ?? 0)) {
+          statusRevision++
+          task.value = { ...task.value, turn_id: event.turn_id }
+        }
+        if (event.type === 'status' && task.value && (event.turn_id ?? 0) >= (task.value.turn_id ?? 0) &&
+          (event.event_id === undefined || event.event_id > latestStatusEvent)) {
+          latestStatusEvent = event.event_id ?? latestStatusEvent
+          statusRevision++
+          task.value = { ...task.value, status: event.status, chatstatus: event.status, turn_id: event.turn_id ?? task.value.turn_id }
+        }
       })
       if (version !== generation || current.signal.aborted) return
       streamState.value = 'closed'
@@ -115,6 +151,7 @@ export function useWorkbench() {
   async function removeTask(id: string) {
     if (deletingId.value || deletedIds.has(id)) return
     if (!window.confirm(`永久删除任务「${id}」？全部文件不可恢复，运行任务将先停止。`)) return
+    if (selectedId.value === id) { chatBusy.value = ''; chatError.value = '' }
     deletingId.value = id
     deleteError.value = ''
     const interrupted = selectedId.value === id
@@ -132,6 +169,8 @@ export function useWorkbench() {
       if (interrupted && selectedId.value === id) void selectTask(id)
       return
     }
+    delete drafts.value[id]
+    delete draftVersions[id]
     deletedIds.add(id)
     // 作废删除前的列表请求，避免旧快照复活已删除任务。
     listGeneration++
@@ -164,6 +203,49 @@ export function useWorkbench() {
     } catch (error) { createError.value = errorText(error); return false }
     finally { creating.value = false }
   }
+  async function control(action: 'send' | 'pause') {
+    if (action === 'send' ? !canSend.value : !canPause.value) return
+    const id = selectedId.value, version = generation
+    const text = draft.value, draftVersion = draftVersions[id] || 0
+    chatBusy.value = action
+    chatError.value = ''
+    const current = () => version === generation && selectedId.value === id && deletingId.value !== id && !deletedIds.has(id)
+    try {
+      if (action === 'send') await api.sendMessage(id, text)
+      else await api.pauseTask(id)
+      if (!current()) return
+      if (action === 'send' && (draftVersions[id] || 0) === draftVersion) drafts.value[id] = ''
+      // 后端确认后全量重放，不本地 echo，也不以 abort 充当暂停。
+      void selectTask(id)
+      void refreshTasks()
+    } catch (error) { if (current()) chatError.value = errorText(error) }
+    finally { if (current()) chatBusy.value = '' }
+  }
+  async function resetHistory() {
+    // 强制重建成功后作废旧请求，以新列表判定选择是否仍存在。
+    const previous = selectedId.value
+    chatBusy.value = ''
+    chatError.value = ''
+    controller?.abort()
+    generation++
+    listGeneration++
+    tasks.value = []
+    selectedId.value = ''
+    task.value = null
+    files.value = []
+    conversation.value = initialConversation()
+    detailLoading.value = false
+    streamState.value = 'idle'
+    detailError.value = streamError.value = ''
+    const version = generation
+    await refreshTasks()
+    if (version !== generation || listError.value) return
+    for (const id of Object.keys(drafts.value)) {
+      if (!tasks.value.some(item => item.task_id === id)) { delete drafts.value[id]; delete draftVersions[id] }
+    }
+    const next = tasks.value.find(item => item.task_id === previous) || tasks.value[0]
+    if (next) void selectTask(next.task_id)
+  }
   async function initialize() {
     await refreshTasks()
     if (!selectedId.value && tasks.value[0]) void selectTask(tasks.value[0].task_id)
@@ -177,5 +259,6 @@ export function useWorkbench() {
   onBeforeUnmount(() => { generation++; listGeneration++; controller?.abort() })
   return { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
     listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
-    submit, initialize, refreshSelected }
+    draft, chatBusy, chatError, canSend, canPause, sendMessage: () => control('send'), pauseTask: () => control('pause'),
+    submit, initialize, resetHistory, refreshSelected }
 }

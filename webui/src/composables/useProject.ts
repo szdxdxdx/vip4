@@ -2,7 +2,7 @@ import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { createProject, getProjectProgress, getProjectResults } from '../projectApi'
 import { isProjectTerminal, type ProjectProgress, type ProjectResults } from '../projectTypes'
 
-export function useProject(active: Ref<boolean>) {
+export function useProject(active: Ref<boolean>, onForced: () => void = () => {}) {
   const projectID = ref('')
   const prompt = ref('')
   const progress = ref<ProjectProgress | null>(null)
@@ -14,7 +14,7 @@ export function useProject(active: Ref<boolean>) {
   let disposed = false
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  let pending: 'create' | 'query' | undefined
+  let pending: 'create' | 'force' | 'query' | undefined
 
   function cancel() {
     generation++
@@ -35,8 +35,10 @@ export function useProject(active: Ref<boolean>) {
     busy.value = true
     const current = () => !disposed && active.value && token === generation
     try {
-      if (action === 'create') {
-        await createProject(id, prompt.value, abort.signal)
+      if (action === 'create' || action === 'force') {
+        await createProject(id, prompt.value, abort.signal, action === 'force')
+        // 创建已生效，即使此时隐藏或换 ID，也须清理工作台旧快照。
+        if (action === 'force' && !disposed) onForced()
         if (!current()) return
       }
       const nextProgress = await getProjectProgress(id, abort.signal)
@@ -62,7 +64,8 @@ export function useProject(active: Ref<boolean>) {
       void drain()
     }
   }
-  function start(action: 'create' | 'query') {
+  function start(action: 'create' | 'force' | 'query') {
+    if ((action === 'create' || action === 'force') && busy.value) return
     cancel()
     error.value = ''
     if (!projectID.value.trim()) {
@@ -71,7 +74,7 @@ export function useProject(active: Ref<boolean>) {
       return
     }
     polling.value = true
-    if (action === 'create') { progress.value = null; results.value = null }
+    if (action !== 'query') { progress.value = null; results.value = null }
     pending = action
     void drain()
   }
@@ -87,6 +90,11 @@ export function useProject(active: Ref<boolean>) {
     if (enabled && polling.value) { pending = 'query'; void drain() }
   }, { flush: 'sync' })
   onBeforeUnmount(() => { disposed = true; cancel() })
+  function forceSubmit() {
+    if (!active.value || busy.value || !projectID.value.trim()) return
+    if (!window.confirm(`强制提交项目「${projectID.value.trim()}」？将先停止旧验证，永久删除该项目全部旧任务文件及数据库映射，不可恢复。`)) return
+    start('force')
+  }
   return { projectID, prompt, progress, results, error, busy, polling,
-    submit: () => start('create'), query: () => start('query') }
+    submit: () => start('create'), forceSubmit, query: () => start('query') }
 }

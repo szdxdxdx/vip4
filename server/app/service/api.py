@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from ..vip_task.task import (
     TaskExistsError,
+    TaskConflictError,
     TaskDeletingError,
     TaskNotFoundError,
     TaskPathError,
@@ -113,3 +114,34 @@ def get_file(
         content_disposition_type='attachment' if download or file.attachment else 'inline',
         headers=headers,
     )
+
+
+class ChatTaskRequest(BaseModel):
+    task_id: str
+
+
+class SendMessageRequest(ChatTaskRequest):
+    message: str
+
+
+async def _chat_call(call, *args):
+    try:
+        return await call(*args)
+    except (TaskConflictError, TaskDeletingError) as error:
+        raise HTTPException(409, str(error)) from None
+    except TaskNotFoundError as error:
+        raise HTTPException(404, str(error)) from None
+    except TaskPathError as error:
+        raise HTTPException(error.status_code, str(error)) from None
+    except (ValueError, TaskMetadataError, OSError) as error:
+        raise HTTPException(400, str(error)) from None
+
+
+@router.post('/task/send_message', status_code=202)
+async def send_message(body: SendMessageRequest, request: Request):
+    return await _chat_call(request.app.state.task_manager.send_message, body.task_id, body.message)
+
+
+@router.post('/task/pause_task')
+async def pause_task(body: ChatTaskRequest, request: Request):
+    return await _chat_call(request.app.state.task_manager.pause_task, body.task_id)

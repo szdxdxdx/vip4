@@ -607,7 +607,7 @@ test('App 删除接线清除报告 iframe 和展开 dialog，不清空用户输�
     await nextTick()
     assert.ok(nodes().some(el => el.tag === 'dialog'))
     assert.ok(nodes().some(el => el.tag === 'iframe'))
-    const input = nodes().find(el => el.tag === 'textarea')
+    const input = nodes().find(el => el.tag === 'textarea' && !el.props?.id)
     input.props['onUpdate:modelValue']?.('用户保留的输入')
     await nextTick()
     const inputValue = input.value
@@ -674,13 +674,14 @@ test('删除完成后新列表确认 ID 缺失，再之后 fresh list 同 ID 新
 })
 
 const { useProject } = await import(pathToFileURL(resolve(out, 'composables/useProject.js')))
+const { default: ProjectPanel } = await import(pathToFileURL(resolve(out, 'components/ProjectPanel.js')))
 const projectApi = await import(pathToFileURL(resolve(out, 'projectApi.js')))
 const { ref } = await import('vue')
 const flushProject = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); await nextTick() }
-function mountedProject() {
+function mountedProject(onForced) {
   let project
   const active = ref(true)
-  const app = renderer.createApp({ setup() { project = useProject(active); return () => null } })
+  const app = renderer.createApp({ setup() { project = useProject(active, onForced); return () => null } })
   app.mount({})
   return { app, p: project, active }
 }
@@ -693,8 +694,50 @@ function projectClock() {
   return { timers, tick() { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()) },
     restore() { globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear } }
 }
-const projectProgress = (id, status = 'running') => ({ projectID: id, status, total: 1, finished: status === 'running' ? 0 : 1, tasks: [{ task_id: `${id}-task`, status }] })
-const projectResults = id => ({ projectID: id, tasks: [{ task_id: `${id}-task`, status: 'completed', files: [{ path: '报告 #.html', size: 12, kind: 'report_html', download_url: '/task/get_file?task_id=t&path=report.html&download=true' }] }] })
+const projectProgress = (id, status = 'running') => ({ projectID: id, status, total: 1, finished: status === 'running' ? 0 : 1, tasks: [{ task_id: `${id}-task`, ip_id: 'B_TcProcess', status }] })
+const projectResults = id => ({ projectID: id, tasks: [{ task_id: `${id}-task`, ip_id: 'B_TcProcess', status: 'completed', files: [{ path: '报告 #.html', size: 12, kind: 'report_html', download_url: '/task/get_file?task_id=t&path=report.html&download=true' }] }] })
+
+test('项目卡以业务 IP 标识为标题，空值和缺字段回退，任务ID始终可区分', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}
+  globalThis.ShadowRoot = class {}
+  const tasks = [
+    { task_id: '0623-abcd', ip_id: 'B_TcProcess', status: 'completed', ipId: 123, name: '不应展示的名称' },
+    { task_id: '0623-empty', ip_id: '', status: 'completed' },
+    { task_id: '0623-legacy', status: 'completed' },
+  ]
+  globalThis.fetch = async url => response(url.includes('get_progress')
+    ? { projectID: 'demo', status: 'completed', total: 3, finished: 3, tasks }
+    : { projectID: 'demo', tasks: tasks.map(task => ({ ...task, files: [
+      { path: `${task.task_id}.html`, size: 12, kind: 'report_html', download_url: `/download/${task.task_id}` },
+    ] })) })
+  const viewed = []
+  const rootElement = {}
+  const app = renderer.createApp(ProjectPanel, { active: true, onViewTask: id => viewed.push(id) })
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  try {
+    app.mount(rootElement)
+    nodes().find(el => el.props?.id === 'project-id').props['onUpdate:modelValue']('demo')
+    await nextTick()
+    nodes().find(el => el.tag === 'button' && el.text === '查询已有项目').props.onClick()
+    await flushProject()
+    const cards = nodes().filter(el => el.tag === 'article' && el.props.class === 'project-task')
+    assert.equal(cards.length, 3)
+    assert.deepEqual(cards.map(card => descendants(card).find(el => el.tag === 'h3').text),
+      ['B_TcProcess', '未提供 IP 标识', '未提供 IP 标识'])
+    for (const [i, card] of cards.entries()) {
+      const children = descendants(card)
+      assert.ok(children.some(el => el.tag === 'p' && el.text === `任务ID：${tasks[i].task_id}`))
+      assert.equal(children.find(el => el.tag === 'a').props.href, `/download/${tasks[i].task_id}`)
+      children.find(el => el.tag === 'button' && el.text === '查看任务').props.onClick()
+    }
+    assert.deepEqual(viewed, tasks.map(task => task.task_id))
+  } finally {
+    app.unmount()
+    globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
+})
 
 test('项目 API 编码、默认提示词、409 和 404 错误', async () => {
   const calls = []
@@ -914,4 +957,466 @@ test('项目页切换保留单 IP 输入和订阅，显示下载并可查看任�
     streams.forEach(stream => stream.c.close())
     globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
   }
+})
+
+
+test('强制提交独立确认、取消不请求，busy 禁止重复，resetting 继续轮询', async () => {
+  const clock = projectClock()
+  let forced = 0, confirmed = false
+  const { app, p } = mountedProject(() => forced++)
+  const creating = deferred(), calls = []
+  globalThis.window = { confirm: text => {
+    assert.match(text, /永久删除.*文件及数据库映射.*不可恢复/)
+    return confirmed
+  } }
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('create_project')) return creating.promise
+    return response(url.includes('get_progress') ? projectProgress('demo', 'resetting') : projectResults('demo'))
+  }
+  try {
+    p.forceSubmit()
+    assert.equal(calls.length, 0)
+    p.projectID.value = 'demo'; p.prompt.value = '保留提示'
+    p.forceSubmit()
+    assert.equal(calls.length, 0)
+    confirmed = true; p.forceSubmit()
+    assert.equal(p.busy.value, true)
+    assert.deepEqual(JSON.parse(calls[0].options.body), { projectID: 'demo', prompt: '保留提示', force: true })
+    p.forceSubmit(); p.submit()
+    assert.equal(calls.length, 1)
+    creating.resolve(response({ projectID: 'demo', status: 'accepted' }))
+    await flushProject()
+    assert.equal(forced, 1)
+    assert.equal(p.progress.value.status, 'resetting')
+    assert.equal(clock.timers.size, 1)
+    assert.equal(p.prompt.value, '保留提示')
+    assert.equal(p.projectID.value, 'demo')
+    clock.tick(); await flushProject()
+    assert.equal(calls.length, 5)
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('强制创建失败不清理历史，换 ID 后迟到成功仍通知历史刷新', async () => {
+  let forced = 0
+  const { app, p } = mountedProject(() => forced++)
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: '项目正在重置' }), { status: 409 })
+  try {
+    p.projectID.value = 'A'; p.forceSubmit(); await flushProject()
+    assert.match(p.error.value, /项目正在重置/)
+    assert.equal(forced, 0)
+    assert.equal(p.polling.value, false)
+    const late = deferred()
+    globalThis.fetch = () => late.promise
+    p.forceSubmit()
+    p.projectID.value = 'B'
+    late.resolve(response({ projectID: 'A', status: 'accepted' }))
+    await flushProject()
+    assert.equal(forced, 1)
+    assert.equal(p.progress.value, null)
+    assert.equal(p.results.value, null)
+    assert.equal(p.projectID.value, 'B')
+  } finally { app.unmount() }
+})
+
+test('强制重建清空旧会话与报告，迟到列表和事件不能复活，刷新选择新任务', async () => {
+  const oldList = deferred(), streams = new Map()
+  let phase = 'old'
+  const task = id => ({ task_id: id, prompt: id, status: 'running', created_at: '' })
+  globalThis.fetch = async url => {
+    if (url === '/task/list_tasks') {
+      if (phase === 'late') return oldList.promise
+      return response({ tasks: [task(phase === 'new' ? 'NEW' : 'OLD'), task('UNRELATED')] })
+    }
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/get_task')) return response({ task: task(id), files: [{ path: id + '.html', kind: 'report_html', size: 10 }] })
+    return new Response(new ReadableStream({ start(c) { streams.set(id, c) } }))
+  }
+  const { app, w } = mountedWorkbench()
+  try {
+    await w.initialize(); await waitFor(() => streams.has('OLD'))
+    phase = 'late'
+    const refreshing = w.refreshTasks()
+    phase = 'new'
+    await w.resetHistory(); await waitFor(() => streams.has('NEW'))
+    oldList.resolve(response({ tasks: [task('OLD')] }))
+    await refreshing
+    streams.get('OLD').enqueue(new TextEncoder().encode(JSON.stringify(rpc({ type: 'message_start', message: assistant('过期消息') })) + '\n'))
+    await flushProject()
+    assert.deepEqual(w.tasks.value.map(t => t.task_id), ['NEW', 'UNRELATED'])
+    assert.equal(w.selectedId.value, 'NEW')
+    assert.deepEqual(w.messages.value.map(m => m.text), ['NEW'])
+    assert.deepEqual(w.files.value.map(f => f.path), ['NEW.html'])
+  } finally { app.unmount(); for (const c of streams.values()) { try { c.close() } catch { /* 旧订阅已取消。 */ } } }
+})
+
+
+test('项目强制按钮不走普通提交，成功刷新工作台且保留两侧输入', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}; globalThis.ShadowRoot = class {}
+  globalThis.window = { confirm: () => true }
+  let reset = false
+  const streams = [], bodies = []
+  const task = { task_id: 'OLD', prompt: '旧提示', status: 'running', created_at: '' }
+  globalThis.fetch = async (url, options) => {
+    if (url === '/task/list_tasks') return response({ tasks: reset ? [] : [task] })
+    if (url.startsWith('/task/get_task')) return response({ task, files: [] })
+    if (url.startsWith('/task/get_events')) return new Response(new ReadableStream({ start(c) { streams.push({ c, signal: options.signal }) } }))
+    if (url === '/project/create_project') {
+      bodies.push(JSON.parse(options.body)); reset = true
+      return response({ projectID: 'demo', status: 'accepted' })
+    }
+    return response(url.includes('get_progress') ? { ...projectProgress('demo', 'completed'), tasks: [] } : { projectID: 'demo', tasks: [] })
+  }
+  const rootElement = {}, app = renderer.createApp(App)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  try {
+    app.mount(rootElement); await waitFor(() => streams.length === 1)
+    const singleInput = nodes().find(el => el.tag === 'textarea' && !el.props.id)
+    singleInput.props['onUpdate:modelValue']('新建表单草稿')
+    nodes().find(el => el.tag === 'button' && el.text === '项目验证').props.onClick()
+    const projectInput = nodes().find(el => el.props?.id === 'project-id')
+    const projectPrompt = nodes().find(el => el.props?.id === 'project-prompt')
+    const forceButton = nodes().find(el => el.tag === 'button' && el.text === '强制提交验证')
+    assert.equal(forceButton.props.type, 'button')
+    assert.equal(forceButton.props.disabled, true)
+    projectInput.props['onUpdate:modelValue']('demo')
+    projectPrompt.props['onUpdate:modelValue']('项目草稿')
+    await nextTick()
+    assert.equal(forceButton.props.disabled, false)
+    forceButton.props.onClick(); await flushProject()
+    assert.deepEqual(bodies, [{ projectID: 'demo', prompt: '项目草稿', force: true }])
+    assert.equal(streams[0].signal.aborted, true)
+    assert.equal(nodes().some(el => el.props?.class === 'task-card'), false)
+    assert.equal(singleInput.value, '新建表单草稿')
+    assert.equal(projectInput.value, 'demo')
+    assert.equal(projectPrompt.value, '项目草稿')
+  } finally {
+    app.unmount()
+    for (const { c } of streams) { try { c.close() } catch { /* 已取消。 */ } }
+    globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
+})
+
+
+test('多轮显式 user 全量重放，event_id 去重，同文本不同轮和同轮均保留', () => {
+  const state = initialConversation('初始')
+  const events = [
+    { type: 'user', message: '初始', turn_id: 1, event_id: 1 },
+    { ...rpc({ type: 'message_start', message: assistant('') }), turn_id: 1, event_id: 2 },
+    { ...rpc({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '回答' } }), turn_id: 1, event_id: 3 },
+    { ...rpc({ type: 'message_end', message: assistant('回答') }), turn_id: 1, event_id: 4 },
+    { type: 'user', message: '继续', turn_id: 2, event_id: 5 },
+    { type: 'user', message: '继续', turn_id: 3, event_id: 6 },
+    { type: 'user', message: '继续', turn_id: 3, event_id: 7 },
+  ]
+  for (const e of [...events, ...events]) applyTaskEvent(state, e)
+  assert.deepEqual(state.items.map(m => m.text), ['初始', '回答', '继续', '继续', '继续'])
+  assert.deepEqual(state.items.filter(m => m.kind === 'user').map(m => m.turnId), [1, 2, 3, 3])
+})
+
+test('legacy RPC user start/end、首 prompt 与显式消息混合不重复，后续用户不丢', () => {
+  for (const explicitFirst of [false, true]) {
+    const state = initialConversation('原提示')
+    const explicit = { type: 'user', message: '原提示', turn_id: 1, event_id: 1 }
+    if (explicitFirst) applyTaskEvent(state, explicit)
+    applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: '工作目录和 skill 前缀 原提示' } }))
+    applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '工作目录和 skill 前缀 原提示' } }))
+    if (!explicitFirst) applyTaskEvent(state, explicit)
+    applyTaskEvent(state, rpc({ type: 'message_end', message: assistant('第一轮') }))
+    applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: '补充' }] } }))
+    applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '补充' } }))
+    assert.deepEqual(state.items.map(m => m.text), ['原提示', '第一轮', '补充'])
+  }
+})
+
+test('不同轮助手流与同名工具隔离，旧轮迟到输出不拼入新轮', () => {
+  const state = initialConversation()
+  for (const turn_id of [1, 2]) {
+    applyTaskEvent(state, { ...rpc({ type: 'message_start', message: assistant('轮' + turn_id) }), turn_id })
+    applyTaskEvent(state, { ...rpc({ type: 'tool_execution_start', toolCallId: 'same', toolName: 'bash' }), turn_id })
+  }
+  applyTaskEvent(state, { ...rpc({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '旧增量' } }), turn_id: 1 })
+  applyTaskEvent(state, { ...rpc({ type: 'tool_execution_end', toolCallId: 'same', result: '旧结果' }), turn_id: 1 })
+  assert.deepEqual(state.items.filter(m => m.kind === 'assistant').map(m => m.text), ['轮1旧增量', '轮2'])
+  assert.deepEqual(state.items.filter(m => m.kind === 'tool').map(m => m.state), ['success', 'running'])
+})
+
+function chatFixture() {
+  const records = new Map(['A', 'B'].map(id => [id, {
+    task_id: id, prompt: 'prompt-' + id, status: 'running', chatstatus: 'running', turn_id: 1,
+    verification_status: 'completed', created_at: '',
+  }]))
+  const histories = new Map(['A', 'B'].map(id => [id, [{ type: 'user', message: 'prompt-' + id, turn_id: 1, event_id: 1 }]]))
+  const streams = [], calls = []
+  let controlHandler = async (url, body) => {
+    const t = records.get(body.task_id)
+    if (url.endsWith('pause_task')) t.status = t.chatstatus = 'paused'
+    else {
+      t.turn_id++; t.status = t.chatstatus = 'queued'
+      const history = histories.get(body.task_id)
+      history.push({ type: 'user', message: body.message, turn_id: t.turn_id, event_id: history.length + 1 })
+    }
+    return response({ task_id: t.task_id, status: t.status })
+  }
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    if (url === '/task/list_tasks') return response({ tasks: [...records.values()] })
+    if (url === '/task/send_message' || url === '/task/pause_task') return controlHandler(url, JSON.parse(options.body))
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/delete_task')) { records.delete(id); return response({ task_id: id, status: 'deleted' }) }
+    if (url.startsWith('/task/get_task')) return response({ task: records.get(id), files: [{ path: id + '.html', kind: 'report_html', size: 10 }] })
+    return new Response(new ReadableStream({ start(c) {
+      streams.push({ id, c, signal: options.signal })
+      for (const e of histories.get(id)) c.enqueue(new TextEncoder().encode(JSON.stringify(e) + '\n'))
+    } }))
+  }
+  const { app, w } = mountedWorkbench()
+  return { app, w, records, histories, streams, calls,
+    setControl(fn) { controlHandler = fn },
+    emit(id, e) { streams.filter(s => s.id === id).at(-1).c.enqueue(new TextEncoder().encode(JSON.stringify(e) + '\n')) },
+    async select(id) { await w.refreshTasks(); void w.selectTask(id); await waitFor(() => w.task.value?.task_id === id && w.streamState.value === 'live') },
+    close() { app.unmount(); for (const { c } of streams) { try { c.close() } catch { /* 已取消。 */ } } },
+  }
+}
+
+test('聊天 API 请求体及 409 错误，暂停真实请求不以 abort 替代', async () => {
+  const calls = []
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response({ task_id: 'A', status: 'paused' }) }
+  await api.sendMessage('A', '补充')
+  await api.pauseTask('A')
+  assert.deepEqual(calls.map(c => [c.url, c.options.method, JSON.parse(c.options.body)]), [
+    ['/task/send_message', 'POST', { task_id: 'A', message: '补充' }],
+    ['/task/pause_task', 'POST', { task_id: 'A' }],
+  ])
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: '资源忙' }), { status: 409 })
+  await assert.rejects(api.sendMessage('A', '补充'), /资源忙/)
+  await assert.rejects(api.pauseTask('A'), /资源忙/)
+})
+
+test('运行中允许发送补充，busy 禁重发，成功全量重连无重复，输入修改不被清空', async () => {
+  const f = chatFixture(), late = deferred()
+  try {
+    await f.select('A'); f.w.draft.value = '补充'
+    assert.equal(f.w.canSend.value, true)
+    f.setControl(() => late.promise)
+    const sending = f.w.sendMessage()
+    assert.equal(f.w.chatBusy.value, 'send')
+    assert.equal(f.w.canSend.value, false)
+    await f.w.sendMessage(); await f.w.pauseTask()
+    assert.equal(f.calls.filter(c => c.url === '/task/send_message').length, 1)
+    f.w.draft.value = '下一条'
+    f.histories.get('A').push({ type: 'user', message: '补充', turn_id: 1, event_id: 2 })
+    late.resolve(response({ task_id: 'A', status: 'running' })); await sending
+    await waitFor(() => f.streams.length === 2 && f.w.messages.value.length === 2)
+    assert.equal(f.streams[0].signal.aborted, true)
+    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-A', '补充'])
+    assert.equal(f.w.draft.value, '下一条')
+  } finally { f.close() }
+})
+
+test('暂停等待后端确认，暂停后与 idle/completed 原 task 继续，多轮历史完整', async () => {
+  const f = chatFixture(), pausing = deferred()
+  try {
+    await f.select('A')
+    f.setControl(() => pausing.promise)
+    const request = f.w.pauseTask()
+    assert.equal(f.w.chatBusy.value, 'pause')
+    assert.equal(f.w.task.value.status, 'running')
+    assert.equal(f.streams[0].signal.aborted, false)
+    f.records.get('A').status = f.records.get('A').chatstatus = 'paused'
+    pausing.resolve(response({ task_id: 'A', status: 'paused' })); await request
+    await waitFor(() => f.streams.length === 2 && f.w.task.value?.status === 'paused')
+    f.setControl(async (url, body) => {
+      const task = f.records.get('A'); task.turn_id++; task.status = task.chatstatus = 'queued'
+      const history = f.histories.get('A')
+      history.push({ type: 'user', message: body.message, turn_id: task.turn_id, event_id: history.length + 1 })
+      return response({ task_id: 'A', status: 'queued' })
+    })
+    for (const status of ['paused', 'idle', 'completed']) {
+      f.w.task.value.status = status
+      f.w.draft.value = '继续'
+      const count = f.streams.length
+      await f.w.sendMessage(); await waitFor(() => f.streams.length > count && f.w.streamState.value === 'live')
+      assert.equal(f.w.selectedId.value, 'A')
+      assert.equal(f.w.draft.value, '')
+    }
+    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-A', '继续', '继续', '继续'])
+    assert.equal(f.w.task.value.verification_status, 'completed')
+  } finally { f.close() }
+})
+
+test('旧 status/settled 不提前结束新轮，重复 status 忽略，迟到旧详情不盖新状态', async () => {
+  const f = chatFixture()
+  try {
+    f.records.get('A').turn_id = 3
+    f.histories.get('A').push({ type: 'status', status: 'completed', turn_id: 1, event_id: 2 })
+    await f.select('A')
+    assert.equal(f.w.task.value.status, 'running')
+    const old = deferred(), mockFetch = globalThis.fetch
+    globalThis.fetch = (url, options) => url.startsWith('/task/get_task') ? old.promise : mockFetch(url, options)
+    const refreshing = f.w.refreshSelected()
+    f.emit('A', { type: 'status', status: 'paused', turn_id: 3, event_id: 3 })
+    await waitFor(() => f.w.task.value.status === 'paused')
+    f.emit('A', { type: 'status', status: 'failed', turn_id: 3, event_id: 3 })
+    f.emit('A', { ...rpc({ type: 'agent_settled' }), turn_id: 1, event_id: 4 })
+    old.resolve(response({ task: { ...f.records.get('A'), status: 'running' }, files: [] }))
+    await refreshing; await flushProject()
+    assert.equal(f.w.task.value.status, 'paused')
+    assert.equal(f.w.files.value[0].path, 'A.html')
+  } finally { f.close() }
+})
+
+test('切任务隔离 send/pause 迟到成功与失败，不重连、不清草稿和新请求忙态', async () => {
+  for (const action of ['send', 'pause']) for (const success of [true, false]) {
+    const f = chatFixture(), late = deferred(), newRequest = deferred()
+    try {
+      await f.select('A'); f.w.draft.value = 'A草稿'
+      f.setControl(() => late.promise)
+      const old = action === 'send' ? f.w.sendMessage() : f.w.pauseTask()
+      await f.select('B'); f.w.draft.value = 'B草稿'
+      f.setControl(() => newRequest.promise)
+      const current = f.w.sendMessage()
+      if (success) late.resolve(response({ task_id: 'A', status: 'paused' }))
+      else late.resolve(new Response(JSON.stringify({ detail: 'A迟到错误' }), { status: 409 }))
+      await old; await flushProject()
+      assert.equal(f.w.selectedId.value, 'B')
+      assert.equal(f.w.draft.value, 'B草稿')
+      assert.equal(f.w.chatBusy.value, 'send')
+      assert.equal(f.w.chatError.value, '')
+      assert.equal(f.streams.length, 2)
+      newRequest.resolve(new Response(JSON.stringify({ detail: 'B错误' }), { status: 409 })); await current
+      assert.equal(f.w.chatError.value, 'B错误')
+      await f.select('A'); assert.equal(f.w.draft.value, 'A草稿')
+    } finally { f.close() }
+  }
+})
+
+test('删除与 force 后迟到聊天请求不能复活旧 task，草稿缺失任务清理', async () => {
+  for (const reset of [false, true]) for (const action of ['send', 'pause']) {
+    const f = chatFixture(), late = deferred()
+    try {
+      await f.select('A'); f.w.draft.value = 'A草稿'
+      f.setControl(() => late.promise)
+      const request = action === 'send' ? f.w.sendMessage() : f.w.pauseTask()
+      if (reset) { f.records.delete('A'); await f.w.resetHistory() }
+      else await f.w.removeTask('A')
+      await waitFor(() => f.w.task.value?.task_id === 'B')
+      f.w.draft.value = 'B草稿'
+      late.resolve(response({ task_id: 'A', status: 'paused' })); await request; await flushProject()
+      assert.equal(f.w.selectedId.value, 'B')
+      assert.equal(f.w.draft.value, 'B草稿')
+      assert.equal(f.w.chatError.value, '')
+      assert.equal(f.calls.filter(c => c.url.startsWith('/task/get_task') && c.url.endsWith('=A')).length, 1)
+    } finally { f.close() }
+  }
+})
+
+test('force 保留仍存在的当前 task 与草稿；无任务、created、空白禁止发送', async () => {
+  const f = chatFixture()
+  try {
+    assert.equal(f.w.canSend.value, false); await f.w.sendMessage(); await f.w.pauseTask()
+    await f.select('B'); f.w.draft.value = 'B草稿'
+    await f.w.resetHistory(); await waitFor(() => f.w.task.value?.task_id === 'B')
+    assert.equal(f.w.draft.value, 'B草稿')
+    f.w.task.value.status = 'created'; assert.equal(f.w.canSend.value, false)
+    f.w.task.value.status = 'running'; f.w.draft.value = '  '; assert.equal(f.w.canSend.value, false)
+    assert.equal(f.calls.some(c => ['/task/send_message', '/task/pause_task'].includes(c.url)), false)
+  } finally { f.close() }
+})
+
+
+test('实际聊天输入接线：模式/视图/切任务保留隔离草稿，发送忙态与错误展示', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}; globalThis.ShadowRoot = class {}
+  const f = chatFixture(), late = deferred()
+  const rootElement = {}, app = renderer.createApp(App)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  const button = text => nodes().find(el => el.tag === 'button' && el.text === text)
+  const input = () => nodes().find(el => el.props?.id === 'chat-message')
+  const select = id => nodes().find(el => el.props?.class === 'task-select' && descendants(el).some(n => n.tag === 'strong' && n.text === id)).props.onClick()
+  try {
+    app.mount(rootElement); await waitFor(() => f.streams.length === 1); await nextTick()
+    input().props.onInput({ target: { value: 'A草稿' } }); await nextTick()
+    const composer = nodes().find(el => el.tag === 'textarea' && !el.props?.id)
+    composer.props['onUpdate:modelValue']('创建草稿')
+    button('验证结果报告').props.onClick(); await nextTick()
+    button('项目验证').props.onClick(); await nextTick()
+    button('单 IP 验证').props.onClick(); button('对话').props.onClick(); await nextTick()
+    assert.equal(input().props.value, 'A草稿')
+    assert.equal(composer.value, '创建草稿')
+    select('B'); await waitFor(() => f.streams.length === 2); await nextTick()
+    assert.equal(input().props.value, '')
+    input().props.onInput({ target: { value: 'B草稿' } }); await nextTick()
+    select('A'); await waitFor(() => f.streams.length === 3); await nextTick()
+    assert.equal(input().props.value, 'A草稿')
+    f.setControl(() => late.promise)
+    nodes().find(el => el.tag === 'form' && el.props.class === 'chat-input').props.onSubmit({ preventDefault() {} })
+    await nextTick()
+    assert.equal(button('发送').props.disabled, true)
+    assert.equal(button('暂停').props.disabled, true)
+    assert.equal(f.streams.at(-1).signal.aborted, false)
+    late.resolve(new Response(JSON.stringify({ detail: '发送暂不可用' }), { status: 409 }))
+    await flushProject()
+    assert.equal(input().props.value, 'A草稿')
+    assert.ok(nodes().some(el => el.props?.role === 'alert' && el.text === '发送暂不可用'))
+    assert.equal(button('发送').props.disabled, false)
+    assert.equal(composer.value, '创建草稿')
+  } finally {
+    app.unmount(); f.close()
+    globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
+})
+
+test('force 刷新期间迟到旧详情不复活旧文件，删除中发送暂停禁止', async () => {
+  const f = chatFixture(), lateDetail = deferred(), lateDelete = deferred()
+  try {
+    await f.select('A'); f.w.draft.value = 'A草稿'
+    const mockFetch = globalThis.fetch
+    globalThis.fetch = (url, options) => url.startsWith('/task/get_task') && url.endsWith('=A') ? lateDetail.promise : mockFetch(url, options)
+    const refreshing = f.w.refreshSelected()
+    f.records.delete('A'); await f.w.resetHistory(); await waitFor(() => f.w.task.value?.task_id === 'B')
+    lateDetail.resolve(response({ task: { task_id: 'A', status: 'completed', prompt: '旧', turn_id: 1 }, files: [{ path: 'old.html' }] }))
+    await refreshing
+    assert.equal(f.w.task.value.task_id, 'B')
+    assert.equal(f.w.files.value[0].path, 'B.html')
+    f.w.draft.value = 'B草稿'
+    globalThis.fetch = (url, options) => url.startsWith('/task/delete_task') ? lateDelete.promise : mockFetch(url, options)
+    const deleting = f.w.removeTask('B')
+    assert.equal(f.w.canSend.value, false); assert.equal(f.w.canPause.value, false)
+    await f.w.sendMessage(); await f.w.pauseTask()
+    assert.equal(f.calls.some(c => ['/task/send_message', '/task/pause_task'].includes(c.url)), false)
+    f.records.delete('B'); lateDelete.resolve(response({ task_id: 'B', status: 'deleted' })); await deleting
+    assert.equal(f.w.selectedId.value, '')
+  } finally { f.close() }
+})
+
+
+test('新轮完成读取报告不丢聊天消息，旧轮报告完成状态不能盖新轮', async () => {
+  const f = chatFixture()
+  try {
+    await f.select('A'); f.w.draft.value = '继续验证'
+    await f.w.sendMessage(); await waitFor(() => f.streams.length === 2 && f.w.streamState.value === 'live')
+    f.emit('A', { type: 'status', status: 'completed', turn_id: 1, event_id: 10 })
+    await flushProject()
+    assert.equal(f.w.task.value.status, 'queued')
+    f.emit('A', { ...rpc({ type: 'message_end', message: assistant('新的回答') }), turn_id: 2, event_id: 11 })
+    f.records.get('A').status = f.records.get('A').chatstatus = 'completed'
+    f.emit('A', { type: 'status', status: 'completed', turn_id: 2, event_id: 12 })
+    f.streams.at(-1).c.close()
+    await waitFor(() => f.w.streamState.value === 'closed' && f.w.task.value.status === 'completed')
+    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-A', '继续验证', '新的回答'])
+    assert.equal(f.w.files.value[0].path, 'A.html')
+  } finally { f.close() }
+})
+
+
+test('项目任务的暂停和普通聊天状态有明确标签', async () => {
+  const { projectLabels } = await import(pathToFileURL(resolve(out, 'projectTypes.js')))
+  assert.equal(projectLabels.paused, '已暂停')
+  assert.equal(projectLabels.idle, '对话结束')
 })
