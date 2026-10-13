@@ -34,6 +34,8 @@
 
 ## 课题三产物
 
+课题三接口尚未公开，`server/tmp_keti3.py` 是按同一接口实现的临时后端：直接运行 `python3 server/tmp_keti3.py`（默认 127.0.0.1:50053），它只接受唯一 projectID 并只返回 `tmp/NWM_synthesis.zip`，其余请求返回 404。`KETI3_BASE_URL` 指向该地址即可完整走通课题三流程，接口公开后改为真实服务地址。
+
 课题三服务地址在 `server/app/vip_task/config.py` 的 `KETI3_BASE_URL` 中配置，例如 `http://课题三主机:50053`（不要包含 `/api`）。前端选择“课题三”，输入正整数 projectID；非法课题三 ID 返回 422，配置错误返回 400，均在强制清理之前拒绝；API 提交 `{ "projectID": "1001", "source": "keti3" }`。省略 source 仍使用课题二。课题三调用 `POST /api/verify`、正文 `{ "project_id": "1001" }` 打包已存在的最新合成产物，再 GET 返回的 zip_url 下载；不调用 `/api/synthesize`，也不自行拼接远端目录。服务地址未配置、没有产物或打包失败会显示项目错误。
 
 每个课题三项目只创建一个自动分配 ID 的任务，业务标识为 `keti3:<projectID>`。原 ZIP 保留为任务根目录 `keti3.zip`，全部文件按原目录结构解压到 input，不按课题二字段筛选，也不转换文件编码；files.csv 记录 ZIP 和每个解压文件的来源及绝对保存路径。拒绝路径穿越、符号链接、特殊文件、重复路径和覆盖已有文件；下载上限 256 MiB，解压上限 1 GiB，条目上限 10000。输入完整准备成功后才启动验证，失败不会启动 Pi。
@@ -58,7 +60,7 @@
 | --- | --- |
 | `KETI2_SEARCH_URL` | `http://8.130.30.48:8877/api/search/searchSoftwareIPByProjectId`，课题二项目 IP 查询地址 |
 | `KETI2_DOWNLOAD_URL` | `http://8.130.30.48:8877/api/file/downloadFile`，课题二文件 POST 下载地址；空字符串禁用路径下载 |
-| `KETI3_BASE_URL` | 空，课题三服务根地址，例如 `http://主机:50053`，不含 `/api`；使用前必须填写 |
+| `KETI3_BASE_URL` | `http://127.0.0.1:50053`，课题三服务根地址，不含 `/api`；当前指向临时后端 |
 
 请求地址不再读取环境变量。其余运行配置仍可通过环境变量设置：
 
