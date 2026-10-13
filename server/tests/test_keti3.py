@@ -27,18 +27,18 @@ class Keti3Tests(unittest.TestCase):
         self.task = Path(self.temp.name) / 'single'
         self.task.mkdir()
         (self.task / 'input').mkdir()
-        self.sources = Keti3Sources('http://keti3.test:50053', timeout=15)
+        self.keti3_sources = Keti3Sources('http://keti3.test:50053', timeout=15)
         self.item = {'ipId': 'keti3:1001', 'zip_url': 'http://keti3.test:50053/api/download/SAM.zip'}
 
     def collect(self, data):
         with patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(data)) as get:
-            self.sources.collect(self.item, self.task)
+            self.keti3_sources.collect(self.item, self.task)
         self.assertEqual(get.call_args.args[0], self.item['zip_url'])
 
     def test_pack_request_constructs_exactly_one_ip_without_synthesis(self):
         response = {'success': True, 'zip_url': '/api/download/SAM.zip', 'project': 'SAM'}
         with patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as get:
-            items = self.sources.search('1001')
+            items = self.keti3_sources.search('1001')
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['ipMsg']['entity']['basicInformation']['id'], 'keti3:1001')
         self.assertEqual(items[0]['_verification_prompt'], VERIFICATION_PROMPT)
@@ -68,9 +68,45 @@ class Keti3Tests(unittest.TestCase):
         self.assertIn('GBK/gb18030', VERIFICATION_PROMPT)
         self.assertIn('规约缺失', VERIFICATION_PROMPT)
 
+    def test_supplied_real_bundle_keeps_all_files(self):
+        sample = Path(__file__).resolve().parents[2] / 'tmp' / 'NWM_synthesis.zip'
+        if not sample.exists():
+            self.skipTest('未提供课题三示例压缩包')
+        data = sample.read_bytes()
+        self.collect(data)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            files = [entry for entry in archive.infolist() if not entry.is_dir()]
+            for entry in files:
+                self.assertEqual((self.task / 'input' / entry.filename).read_bytes(), archive.read(entry))
+        with (self.task / 'files.csv').open(encoding='utf-8', newline='') as source:
+            self.assertEqual(len(list(csv.DictReader(source))), len(files) + 1)
+        self.assertTrue((self.task / 'input' / 'NWM.c').is_file())
+        self.assertTrue((self.task / 'input' / 'IR' / 'NWM.esaml').is_file())
+
+    def test_invalid_keti3_id_is_rejected_before_force_handler(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock, Mock
+        from app.service.project_api import router
+        app = FastAPI()
+        app.include_router(router)
+        app.state.project_manager = Mock(submit=AsyncMock())
+        with TestClient(app) as client:
+            for project_id in ['abc', '0', '-1', ' 1001', '１']:
+                result = client.post('/project/create_project', json={
+                    'projectID': project_id, 'source': 'keti3', 'force': True})
+                self.assertEqual(result.status_code, 422)
+        app.state.project_manager.submit.assert_not_awaited()
+
     def test_wrapping_directory_is_preserved(self):
         self.collect(bundle([('DIST/SAM.c', b'code'), ('DIST/IR/model', b'formal')]))
         self.assertTrue((self.task / 'input' / 'DIST' / 'IR' / 'model').is_file())
+
+    def test_service_address_comes_from_config_not_environment(self):
+        with patch('app.vip_task.config.KETI3_BASE_URL', 'http://new-keti3:50053/'), \
+             patch.dict('os.environ', {'VIP_KETI3_BASE_URL': 'http://ignored:50053'}):
+            self.assertEqual(Keti3Sources().base_url, 'http://new-keti3:50053')
+            self.assertEqual(Keti3Sources('http://explicit:50053').base_url, 'http://explicit:50053')
 
     def test_configuration_and_project_id_errors_do_not_send_http(self):
         with patch('app.vip_task.keti3_sources.urlopen') as get:
@@ -79,28 +115,28 @@ class Keti3Tests(unittest.TestCase):
                     Keti3Sources(base).search('1001')
             for project_id in ['0', '-1', ' 1', 'abc', '1/2']:
                 with self.assertRaises(ValueError):
-                    self.sources.search(project_id)
+                    self.keti3_sources.search(project_id)
         get.assert_not_called()
 
     def test_failed_or_missing_download_responses_are_rejected(self):
         for response in [[], {'success': False, 'message': '未找到产物'}, {'success': 1}, {'success': True}]:
             with self.subTest(response=response), patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(json.dumps(response).encode())):
                 with self.assertRaises(ValueError):
-                    self.sources.search('1001')
+                    self.keti3_sources.search('1001')
 
     def test_download_url_is_bound_to_service(self):
         for url in ['http://other.test/api/download/a.zip', '/api/synthesize', '/api/download/../x',
                     '/api/download/%2e%2e%2fx', '/api/download/a%5cb.zip', '/api/download/a.zip?q=1']:
             with self.subTest(url=url), self.assertRaises(ValueError):
-                self.sources._download_url(url)
-        self.assertEqual(self.sources._download_url('/api/download/代码.zip'),
+                self.keti3_sources._download_url(url)
+        self.assertEqual(self.keti3_sources._download_url('/api/download/代码.zip'),
                          'http://keti3.test:50053/api/download/%E4%BB%A3%E7%A0%81.zip')
 
     def test_zip_path_traversal_is_rejected_before_any_extraction(self):
         for name in ['../escape.c', '/tmp/escape.c', 'C:/escape.c', '..' + chr(92) + 'escape.c']:
             with self.subTest(name=name), patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(bundle([('valid.c', b'code'), (name, b'escape')]))):
                 with self.assertRaises(ValueError):
-                    self.sources.collect(self.item, self.task)
+                    self.keti3_sources.collect(self.item, self.task)
             self.assertFalse((self.task / 'input' / 'valid.c').exists())
             (self.task / 'keti3.zip').unlink()
         self.assertFalse((self.task.parent / 'escape.c').exists())
@@ -113,27 +149,27 @@ class Keti3Tests(unittest.TestCase):
                     bundle([('folder', b'file'), ('folder/code.c', b'code')])]
         for data in archives:
             with patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(data)), self.assertRaises(ValueError):
-                self.sources.collect(self.item, self.task)
+                self.keti3_sources.collect(self.item, self.task)
             (self.task / 'keti3.zip').unlink()
         self.assertEqual(list((self.task / 'input').iterdir()), [])
 
     def test_empty_corrupt_and_oversized_zip_do_not_produce_inputs(self):
         for data, error in [(bundle([]), ValueError), (b'not a zip', zipfile.BadZipFile)]:
             with patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(data)), self.assertRaises(error):
-                self.sources.collect(self.item, self.task)
+                self.keti3_sources.collect(self.item, self.task)
             (self.task / 'keti3.zip').unlink()
         with patch('app.vip_task.keti3_sources.MAX_ARCHIVE_BYTES', 2), patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(b'too big')), self.assertRaises(ValueError):
-            self.sources.collect(self.item, self.task)
+            self.keti3_sources.collect(self.item, self.task)
         (self.task / 'keti3.zip').unlink()
         with patch('app.vip_task.keti3_sources.MAX_INPUT_BYTES', 2), patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(bundle([('code.c', b'large')]))), self.assertRaises(ValueError):
-            self.sources.collect(self.item, self.task)
+            self.keti3_sources.collect(self.item, self.task)
         self.assertEqual(list((self.task / 'input').iterdir()), [])
 
     def test_preexisting_input_is_never_overwritten(self):
         original = self.task / 'input' / 'SAM.c'
         original.write_bytes(b'keep original')
         with patch('app.vip_task.keti3_sources.urlopen', return_value=io.BytesIO(bundle([('SAM.c', b'new')]))), self.assertRaises(ValueError):
-            self.sources.collect(self.item, self.task)
+            self.keti3_sources.collect(self.item, self.task)
         self.assertEqual(original.read_bytes(), b'keep original')
 
 
@@ -148,7 +184,7 @@ class Keti3ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.tasks = TaskManager()
         self.keti2 = unittest.mock.Mock()
         self.manager = ProjectManager(self.tasks, ProjectStore(self.root / 'projects.sqlite3'),
-                                      sources=self.keti2, keti3_sources=Keti3Sources('http://keti3.test:50053'))
+                                      keti2_sources=self.keti2, keti3_sources=Keti3Sources('http://keti3.test:50053'))
         self.data = bundle([('main.c', b'int main(void) {return 0;}'), ('main.h', b'header'),
                             ('IR/model.json', b'{}'), ('iplib/dependency.c', b'dependency')])
 

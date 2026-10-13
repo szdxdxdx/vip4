@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
+from . import config
+
 logger = logging.getLogger(__name__)
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_INPUT_BYTES = 1024 * 1024 * 1024
@@ -18,7 +20,7 @@ MAX_ENTRIES = 10000
 VERIFICATION_PROMPT = (
     '这是课题三合成代码，将整个下载产物作为一个特殊软件 IP 验证，不拆成多个 IP 任务。'
     '保留产物目录结构：IR 目录中的文件是形式模型；产物最外层的 .c 和 .h 是待验证 IP 的主代码；'
-    'iplib 等子目录中的代码是依赖，按需纳入编译和验证。'
+    'iplib 目录中的代码是依赖，按主代码引用关系纳入编译和验证；优化版本和中间文件不要与根层主代码混编。'
     '若 ZIP 含包装目录，以实际包含主代码的产物目录为根，不要把依赖误当主 IP。'
     '输入文件可能使用 GBK/gb18030，按实际编码读取，原始输入不可改写；需要转换时复制到 workspace。'
     '先检查并理解 IR 形式模型，再据此构造验证规约、驱动及结论。'
@@ -28,13 +30,13 @@ VERIFICATION_PROMPT = (
 
 class Keti3Sources:
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
-        self.base_url = (base_url if base_url is not None else os.getenv('VIP_KETI3_BASE_URL', '')).rstrip('/')
+        self.base_url = (base_url if base_url is not None else config.KETI3_BASE_URL).rstrip('/')
         self.timeout = timeout if timeout is not None else float(os.getenv('VIP_KETI3_TIMEOUT', '120'))
 
     def _base(self):
         parts = urlsplit(self.base_url)
         if parts.scheme not in ('http', 'https') or not parts.netloc or parts.path or parts.query or parts.fragment:
-            raise ValueError('请配置 VIP_KETI3_BASE_URL 为课题三服务地址，例如 http://主机:50053（不含 /api）')
+            raise ValueError('请配置 vip_task/config.py 的 KETI3_BASE_URL 为课题三服务地址，例如 http://主机:50053（不含 /api）')
         return parts
 
     def _download_url(self, value):
@@ -49,10 +51,14 @@ class Keti3Sources:
             raise ValueError('课题三 zip_url 必须指向单个压缩包文件')
         return parts._replace(path=quote(parts.path, safe='/%:')).geturl()
 
-    def search(self, project_id: str) -> list[dict]:
+    def validate(self, project_id: str):
+        # 提交前检查本地配置与参数，避免强制覆盖先删数据再发现配置错误。
         self._base()
         if not re.fullmatch(r'[1-9][0-9]*', project_id):
             raise ValueError('课题三 projectID 必须是正整数的字符串')
+
+    def search(self, project_id: str) -> list[dict]:
+        self.validate(project_id)
         request = Request(self.base_url + '/api/verify',
                           data=json.dumps({'project_id': project_id}).encode('utf-8'),
                           headers={'Content-Type': 'application/json'}, method='POST')

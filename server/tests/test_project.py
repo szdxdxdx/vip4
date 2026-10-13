@@ -14,7 +14,7 @@ from unittest.mock import patch, Mock, AsyncMock
 from fastapi.testclient import TestClient
 
 from app.vip_task import config
-from app.vip_task.file_sources import FileSources, SourceConfig, FIELDS
+from app.vip_task.keti2_sources import Keti2Sources, Keti2Config, FIELDS
 from app.vip_task.project import ProjectManager, ProjectStore, ProjectConflictError, ProjectNotFoundError
 from app.vip_task.task import Task, _write_metadata
 from app.vip_task.task_manager import TaskManager
@@ -36,16 +36,16 @@ def status(task, value):
     _write_metadata(path, metadata)
 
 
-class SourceTests(unittest.TestCase):
+class Keti2SourceTests(unittest.TestCase):
     def test_search_schema_and_encoded_project_id(self):
-        sources = FileSources(SourceConfig())
-        with patch('app.vip_task.file_sources.urlopen', return_value=io.BytesIO(
+        sources = Keti2Sources(Keti2Config())
+        with patch('app.vip_task.keti2_sources.urlopen', return_value=io.BytesIO(
             json.dumps({'code': 0, 'result': [item('/a.c')]}).encode())) as network:
             self.assertEqual(len(sources.search('中文 &1')), 1)
             self.assertIn('projectId=%E4%B8%AD%E6%96%87%20%261', network.call_args.args[0])
         for payload in ({'code': 1, 'result': []}, {'code': 0, 'result': {}},
                         {'code': 0, 'result': [{}]}):
-            with patch('app.vip_task.file_sources.urlopen', return_value=io.BytesIO(json.dumps(payload).encode())):
+            with patch('app.vip_task.keti2_sources.urlopen', return_value=io.BytesIO(json.dumps(payload).encode())):
                 with self.assertRaises(ValueError):
                     sources.search('p')
 
@@ -61,7 +61,7 @@ class SourceTests(unittest.TestCase):
             data = item('/uploads/code.c', '/uploads/code.h')
             data['ipMsg']['formalModel']['contracts'] = [None, '无', '', '/uploads/code.c']
             data['ignored'] = '/missing'
-            sources = FileSources(SourceConfig(path_map={'/uploads': str(original)}))
+            sources = Keti2Sources(Keti2Config(path_map={'/uploads': str(original)}))
             sources.collect(data, task)
             with (task / 'files.csv').open() as f:
                 rows = list(csv.DictReader(f))
@@ -80,7 +80,7 @@ class SourceTests(unittest.TestCase):
             source.write_text('C')
             task = root / 'task'
             task.mkdir()
-            sources = FileSources(SourceConfig(download_url=''))
+            sources = Keti2Sources(Keti2Config(download_url=''))
             with self.assertRaises(FileNotFoundError):
                 sources.collect(item(source, root / 'missing.h'), task)
             with (task / 'files.csv').open() as manifest:
@@ -96,14 +96,14 @@ class SourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             target = root / 'target'
-            sources = FileSources(SourceConfig(timeout=7))
-            with patch('app.vip_task.file_sources.urlopen', return_value=io.BytesIO(b'url-data')) as network:
+            sources = Keti2Sources(Keti2Config(timeout=7))
+            with patch('app.vip_task.keti2_sources.urlopen', return_value=io.BytesIO(b'url-data')) as network:
                 sources._copy('https://host/file.c', target)
                 self.assertEqual(network.call_args.args[0], 'https://host/file.c')
             self.assertEqual(target.read_bytes(), b'url-data')
             source = '/software/software-ip-backend/files/ip-integrated-files/345/模式切换指令处理/entity/EntityImplementation/code.h'
             content = b'\x00\xffheader-data'
-            with patch('app.vip_task.file_sources.urlopen', return_value=io.BytesIO(content)) as network:
+            with patch('app.vip_task.keti2_sources.urlopen', return_value=io.BytesIO(content)) as network:
                 sources._copy(source, target)
                 request = network.call_args.args[0]
                 self.assertEqual(request.full_url, 'http://8.130.30.48:8877/api/file/downloadFile')
@@ -113,7 +113,7 @@ class SourceTests(unittest.TestCase):
                 self.assertEqual(network.call_args.kwargs['timeout'], 7)
             self.assertEqual(target.read_bytes(), content)
             target.unlink()
-            with patch('app.vip_task.file_sources.urlopen', side_effect=HTTPError(
+            with patch('app.vip_task.keti2_sources.urlopen', side_effect=HTTPError(
                     sources.config.download_url, 404, 'Not Found', {}, None)):
                 with self.assertRaises(HTTPError):
                     sources._copy(source, target)
@@ -134,8 +134,8 @@ class SourceTests(unittest.TestCase):
             task.mkdir()
             source = '/software/software-ip-backend/files/模式切换指令处理/code.c'
             data = b'int main(void) { return 0; }'
-            with patch('app.vip_task.file_sources.urlopen', return_value=io.BytesIO(data)) as network:
-                FileSources(SourceConfig()).collect(item(source), task)
+            with patch('app.vip_task.keti2_sources.urlopen', return_value=io.BytesIO(data)) as network:
+                Keti2Sources(Keti2Config()).collect(item(source), task)
             self.assertEqual(json.loads(network.call_args.args[0].data), {'filePath': source})
             with (task / 'files.csv').open(encoding='utf-8') as manifest:
                 rows = list(csv.DictReader(manifest))
@@ -145,16 +145,22 @@ class SourceTests(unittest.TestCase):
             self.assertEqual(Path(rows[0]['path']), task / 'input' / 'code.c')
             self.assertEqual(Path(rows[0]['path']).read_bytes(), data)
 
-    def test_download_url_environment_and_local_files_do_not_use_network(self):
-        with patch.dict('os.environ', {'VIP_SOURCE_DOWNLOAD_URL': 'https://host/download',
+    def test_urls_use_config_and_local_files_do_not_use_network(self):
+        with patch.object(config, 'KETI2_SEARCH_URL', 'https://new-host/search'), \
+             patch.object(config, 'KETI2_DOWNLOAD_URL', 'https://new-host/download'), \
+             patch.dict('os.environ', {'VIP_SOURCE_DOWNLOAD_URL': 'https://ignored/download',
+                                      'VIP_PROJECT_SEARCH_URL': 'https://ignored/search',
                                       'VIP_SOURCE_PATH_MAP': '{}'}):
-            self.assertEqual(SourceConfig.from_env().download_url, 'https://host/download')
+            settings = Keti2Config.from_env()
+            self.assertEqual(settings.search_url, 'https://new-host/search')
+            self.assertEqual(settings.download_url, 'https://new-host/download')
+            self.assertEqual(Keti2Config().download_url, 'https://new-host/download')
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / 'source.c'
             source.write_bytes(b'local')
-            sources = FileSources(SourceConfig(path_map={'/uploads': str(root)}))
-            with patch('app.vip_task.file_sources.urlopen', side_effect=AssertionError('禁止网络请求')):
+            sources = Keti2Sources(Keti2Config(path_map={'/uploads': str(root)}))
+            with patch('app.vip_task.keti2_sources.urlopen', side_effect=AssertionError('禁止网络请求')):
                 sources._copy(str(source), root / 'direct.c')
                 sources._copy('/uploads/source.c', root / 'mapped.c')
             self.assertEqual((root / 'direct.c').read_bytes(), b'local')
@@ -193,8 +199,8 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.source = self.root / 'ip.c'
         self.source.write_text('int main(void) {return 0;}')
         self.tasks = TaskManager()
-        self.sources = FileSources(SourceConfig(download_url=''))
-        self.manager = ProjectManager(self.tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.sources)
+        self.keti2_sources = Keti2Sources(Keti2Config(download_url=''))
+        self.manager = ProjectManager(self.tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.keti2_sources)
 
     async def asyncTearDown(self):
         await self.manager.close()
@@ -218,7 +224,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             (task.task_dir / 'workspace' / 'not-result.txt').write_text('not result')
             await asyncio.sleep(.001)
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source, ip_id='B_First'), item(self.source, ip_id='B_Second')]), \
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source, ip_id='B_First'), item(self.source, ip_id='B_Second')]), \
              patch.object(Task, 'run', fake_run):
             self.assertEqual((await self.manager.submit('项目'))['status'], 'accepted')
             with self.assertRaises(ProjectConflictError):
@@ -235,7 +241,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['tasks'][0]['files'][0]['download_url'].startswith('/task/get_file?'))
         with self.assertRaises(ProjectConflictError):
             await self.manager.submit('项目')
-        restored = ProjectManager(self.tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.sources)
+        restored = ProjectManager(self.tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.keti2_sources)
         try:
             self.assertEqual(restored.progress('项目')['status'], 'completed')
             self.assertEqual([t['ip_id'] for t in restored.progress('项目')['tasks']], ['B_First', 'B_Second'])
@@ -250,7 +256,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         del values[2]['ipMsg']['entity']['basicInformation']
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=values), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=values), patch.object(Task, 'run', fake_run):
             await self.manager.submit('missing-id')
             await self.manager.jobs['missing-id']
         progress = self.manager.progress('missing-id')
@@ -258,12 +264,12 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([task['ip_id'] for task in progress['tasks']], ['', '', ''])
 
     async def test_empty_and_network_failure(self):
-        with patch.object(self.sources, 'search', return_value=[]):
+        with patch.object(self.keti2_sources, 'search', return_value=[]):
             await self.manager.submit('empty')
             await self.manager.jobs['empty']
         self.assertEqual(self.manager.progress('empty'), {
             'projectID': 'empty', 'status': 'empty', 'source': 'keti2', 'total': 0, 'finished': 0, 'tasks': []})
-        with patch.object(self.sources, 'search', side_effect=OSError('network failed')):
+        with patch.object(self.keti2_sources, 'search', side_effect=OSError('network failed')):
             await self.manager.submit('bad')
             await self.manager.jobs['bad']
         self.assertEqual(self.manager.progress('bad')['error'], 'network failed')
@@ -271,7 +277,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_collection_failure_does_not_skip_other_ips(self):
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item('/missing/a.c'), item(self.source)]), \
+        with patch.object(self.keti2_sources, 'search', return_value=[item('/missing/a.c'), item(self.source)]), \
              patch.object(Task, 'run', fake_run):
             await self.manager.submit('broken')
             await self.manager.jobs['broken']
@@ -286,7 +292,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             status(task, 'running')
             entered.set()
             await asyncio.Event().wait()
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), \
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), \
              patch.object(Task, 'run', fake_run):
             await self.manager.submit('shutdown')
             await entered.wait()
@@ -306,7 +312,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 await asyncio.Event().wait()
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), \
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), \
              patch.object(Task, 'run', fake_run):
             await self.manager.submit('delete-one')
             await entered.wait()
@@ -319,7 +325,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(progress['tasks'][0]['status'], ('cancelled', 'deleted'))
 
     async def test_progress_does_not_scan_workspace(self):
-        with patch.object(self.sources, 'search', return_value=[item(self.source)]):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]):
             await self.manager.submit('metadata-only')
             self.manager.jobs['metadata-only'].cancel()
             await asyncio.gather(self.manager.jobs['metadata-only'], return_exceptions=True)
@@ -346,7 +352,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_force_completed_project_cleans_files_and_mapping_only_for_target(self):
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('target')
             await self.manager.jobs['target']
             await self.manager.submit('other')
@@ -378,7 +384,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
                     released.set()
             else:
                 status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('running-force')
             await entered.wait()
             old = self.manager.store.tasks('running-force')
@@ -392,7 +398,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         entered = threading.Event()
         release = threading.Event()
         calls = 0
-        collect = self.sources.collect
+        collect = self.keti2_sources.collect
         def slow_collect(*args):
             nonlocal calls
             calls += 1
@@ -403,7 +409,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             return collect(*args)
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source)]), patch.object(self.sources, 'collect', slow_collect), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]), patch.object(self.keti2_sources, 'collect', slow_collect), patch.object(Task, 'run', fake_run):
             await self.manager.submit('collect-force')
             await asyncio.to_thread(entered.wait, 5)
             old = self.manager.store.tasks('collect-force')
@@ -426,7 +432,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_force_cleanup_failure_keeps_mapping_and_allows_retry(self):
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('retry-force')
             await self.manager.jobs['retry-force']
             old = self.manager.store.tasks('retry-force')
@@ -445,7 +451,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         entered = asyncio.Event()
         release = asyncio.Event()
         delete = self.tasks.delete_task
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('cancel-force')
             await self.manager.jobs['cancel-force']
             old = self.manager.store.tasks('cancel-force')
@@ -483,7 +489,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             if ip_id == 'B_Broken':
                 raise OSError('无法创建任务')
             return create(project_id, prompt, ip_id)
-        with patch.object(self.sources, 'search', return_value=[item(self.source, ip_id='B_Broken'), item(self.source, ip_id='B_Good')]), patch.object(self.manager, '_create', failing_create), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source, ip_id='B_Broken'), item(self.source, ip_id='B_Good')]), patch.object(self.manager, '_create', failing_create), patch.object(Task, 'run', fake_run):
             await self.manager.submit('partial-create', force=True)
             await self.manager.jobs['partial-create']
         progress = self.manager.progress('partial-create')
@@ -493,7 +499,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('requires_resubmit', progress)
 
     async def test_force_unknown_project_is_accepted(self):
-        with patch.object(self.sources, 'search', return_value=[]):
+        with patch.object(self.keti2_sources, 'search', return_value=[]):
             await self.manager.submit('new-force', force=True)
             await self.manager.jobs['new-force']
         self.assertEqual(self.manager.progress('new-force')['status'], 'empty')
@@ -501,7 +507,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_delete_completed_and_cold_start_preserves_other_project(self):
         async def fake_run(task):
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('delete')
             await self.manager.jobs['delete']
             await self.manager.submit('keep')
@@ -517,7 +523,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProjectNotFoundError):
             await self.manager.delete('delete')
         cold_tasks = TaskManager()
-        cold = ProjectManager(cold_tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.sources)
+        cold = ProjectManager(cold_tasks, ProjectStore(self.root / 'mapping.sqlite3'), self.keti2_sources)
         try:
             keep = cold.store.tasks('keep')
             await cold.delete('keep')
@@ -536,7 +542,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
                 releasing.set()
                 await release.wait()
                 released.set()
-        with patch.object(self.sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source), item(self.source)]), patch.object(Task, 'run', fake_run):
             await self.manager.submit('running-delete')
             await entered.wait()
             old = self.manager.store.tasks('running-delete')
@@ -561,13 +567,13 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
                 entered, release = threading.Event(), threading.Event()
                 project_id = 'delete-' + phase
                 search = lambda _: [item(self.source)]
-                collect = self.sources.collect
+                collect = self.keti2_sources.collect
                 def slow(*args):
                     entered.set()
                     if not release.wait(5):
                         raise TimeoutError('测试线程未释放')
                     return search(*args) if phase == 'search' else collect(*args)
-                with patch.object(self.sources, 'search', slow if phase == 'search' else search), patch.object(self.sources, 'collect', slow if phase == 'collect' else collect), patch.object(Task, 'run', side_effect=AssertionError('不应启动 Pi')):
+                with patch.object(self.keti2_sources, 'search', slow if phase == 'search' else search), patch.object(self.keti2_sources, 'collect', slow if phase == 'collect' else collect), patch.object(Task, 'run', side_effect=AssertionError('不应启动 Pi')):
                     await self.manager.submit(project_id)
                     self.assertTrue(await asyncio.to_thread(entered.wait, 5))
                     request = asyncio.create_task(self.manager.delete(project_id))
@@ -645,7 +651,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await release.wait()
             return await delete(task_id)
-        with patch.object(self.tasks, 'delete_task', delayed), patch.object(self.sources, 'search', side_effect=AssertionError('关闭期间禁止查询')):
+        with patch.object(self.tasks, 'delete_task', delayed), patch.object(self.keti2_sources, 'search', side_effect=AssertionError('关闭期间禁止查询')):
             request = asyncio.create_task(self.manager.submit('close-force', force=True))
             await entered.wait()
             shutdown = asyncio.create_task(self.manager.close())
@@ -657,19 +663,47 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((config.VIP_TASK_DIR / task_id).exists())
         self.assertEqual(self.manager.projects['close-force']['status'], 'failed')
 
+    async def test_duplicate_project_conflict_precedes_unused_source_configuration(self):
+        with patch.object(self.keti2_sources, 'search', return_value=[]):
+            await self.manager.submit('1001')
+            await self.manager.jobs['1001']
+        with patch.object(self.manager.keti3_sources, 'validate', side_effect=ValueError('课题三未配置')) as validate:
+            with self.assertRaises(ProjectConflictError):
+                await self.manager.submit('1001', source='keti3')
+            validate.assert_not_called()
+
+    async def test_project_finalization_does_not_cancel_a_new_chat_job(self):
+        task_id = self.manager._create('chat-race', None, 'B_Chat')
+        task = self.tasks.tasks[task_id]
+        path = task.task_dir / 'task.json'
+        metadata = json.loads(path.read_text())
+        task.job = asyncio.create_task(asyncio.Event().wait())
+        try:
+            for current in ('queued', 'running'):
+                metadata.update(status=current, chatstatus=current, verification_status='completed')
+                _write_metadata(path, metadata)
+                self.manager._mark_unfinished(task_id)
+                actual = json.loads(path.read_text())
+                self.assertEqual(actual['status'], current)
+                self.assertEqual(actual['chatstatus'], current)
+                self.assertEqual(actual['verification_status'], 'completed')
+        finally:
+            task.job.cancel()
+            await asyncio.gather(task.job, return_exceptions=True)
+
     async def test_keti3_injection_prompt_serial_preparation_and_force_switch(self):
         adapter = Mock()
         adapter.search.return_value = [dict(item(self.source, ip_id='keti3:source'), _verification_prompt='课题三验证要求')]
-        adapter.collect.side_effect = self.sources.collect
+        adapter.collect.side_effect = self.keti2_sources.collect
         await self.manager.close()
         self.manager = ProjectManager(self.tasks, ProjectStore(self.root / 'mapping.sqlite3'),
-                                      self.sources, keti3_sources=adapter)
+                                      self.keti2_sources, keti3_sources=adapter)
         async def fake_run(task):
             self.assertTrue((task.task_dir / 'files.csv').exists())
             self.assertIn('用户附加要求', task.prompt)
             self.assertIn('课题三验证要求', task.prompt)
             status(task, 'completed')
-        with patch.object(self.sources, 'search', side_effect=AssertionError('不能查询课题二')), patch.object(Task, 'run', fake_run):
+        with patch.object(self.keti2_sources, 'search', side_effect=AssertionError('不能查询课题二')), patch.object(Task, 'run', fake_run):
             await self.manager.submit('source', '用户附加要求', source='keti3')
             await self.manager.jobs['source']
             adapter.search.assert_called_once_with('source')
@@ -684,11 +718,92 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('课题三验证要求', task.prompt)
             self.assertIn('课题二要求', task.prompt)
             status(task, 'completed')
-        with patch.object(self.sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', keti2_run):
+        with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]), patch.object(Task, 'run', keti2_run):
             await self.manager.submit('source', '课题二要求', force=True)
             await self.manager.jobs['source']
         self.assertFalse((config.VIP_TASK_DIR / old).exists())
         self.assertEqual(self.manager.progress('source')['source'], 'keti2')
+
+    async def test_keti3_validation_failure_preserves_force_target(self):
+        task_id = self.manager._create('123', None, 'B_Old')
+        directory = config.VIP_TASK_DIR / task_id
+        report = directory / 'workspace' / 'report.txt'
+        report.write_text('旧结果')
+        self.manager.keti3_sources = Mock()
+        self.manager.keti3_sources.validate.side_effect = ValueError('课题三配置或 ID 无效')
+        with patch.object(self.tasks, 'delete_task', new_callable=AsyncMock) as delete:
+            with self.assertRaises(ValueError):
+                await self.manager.submit('123', force=True, source='keti3')
+            delete.assert_not_awaited()
+        self.manager.keti3_sources.validate.assert_called_once_with('123')
+        self.assertEqual(self.manager.store.tasks('123'), [task_id])
+        self.assertEqual(report.read_text(), '旧结果')
+        self.assertNotIn('123', self.manager.resets)
+        self.assertNotIn('123', self.manager.jobs)
+
+    async def test_store_add_failure_rolls_back_unstarted_task(self):
+        with patch.object(self.manager.store, 'add', side_effect=sqlite3.OperationalError('映射写入失败')), \
+             patch.object(Task, 'run', side_effect=AssertionError('不应启动 Pi')):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.manager._create('rollback', None, 'B_Rollback')
+        self.assertEqual(self.manager.store.tasks('rollback'), [])
+        self.assertEqual(self.tasks.tasks, {})
+        self.assertEqual(list(config.VIP_TASK_DIR.iterdir()), [])
+        self.assertEqual(self.manager.unmapped, {})
+
+    async def test_creation_rollback_failure_preserves_ownership_for_cleanup_retry(self):
+        for action in ('delete', 'force'):
+            with self.subTest(action=action):
+                project_id = 'rollback-' + action
+                with patch.object(self.keti2_sources, 'search', return_value=[item(self.source)]), \
+                     patch.object(self.manager.store, 'add', side_effect=sqlite3.OperationalError('映射写入失败')), \
+                     patch.object(Task, 'delete_files', side_effect=PermissionError('回滚失败')):
+                    await self.manager.submit(project_id)
+                    await self.manager.jobs[project_id]
+                progress = self.manager.progress(project_id)
+                self.assertEqual(progress['status'], 'failed')
+                self.assertEqual(progress['total'], 1)
+                task = progress['tasks'][0]
+                self.assertEqual((task['status'], task['chatstatus']), ('cancelled', 'cancelled'))
+                task_id = task['task_id']
+                self.assertIn(task_id, self.tasks.tasks)
+                with patch.object(self.tasks, 'delete_task', side_effect=PermissionError('仍无法删除')):
+                    with self.assertRaises(PermissionError):
+                        await self.manager.delete(project_id)
+                self.assertEqual(self.manager.progress(project_id)['total'], 1)
+                with patch.object(self.keti2_sources, 'search', return_value=[]):
+                    if action == 'delete':
+                        await self.manager.delete(project_id)
+                    else:
+                        await self.manager.submit(project_id, force=True)
+                        await self.manager.jobs[project_id]
+                self.assertNotIn(project_id, self.manager.unmapped)
+                self.assertNotIn(task_id, self.tasks.tasks)
+                self.assertFalse((config.VIP_TASK_DIR / task_id).exists())
+
+    async def test_mark_unfinished_synchronizes_only_active_metadata(self):
+        task_id = self.manager._create('unfinished', None, 'B_State')
+        path = config.VIP_TASK_DIR / task_id / 'task.json'
+        original = json.loads(path.read_text())
+        for active in ('created', 'queued', 'running'):
+            for verification in (None, 'created', 'queued', 'running', 'completed', 'failed'):
+                with self.subTest(active=active, verification=verification):
+                    metadata = {**original, 'status': active, 'chatstatus': active}
+                    if verification is not None:
+                        metadata['verification_status'] = verification
+                    _write_metadata(path, metadata)
+                    self.manager._mark_unfinished(task_id, 'failed')
+                    updated = json.loads(path.read_text())
+                    self.assertEqual(updated['status'], 'failed')
+                    self.assertEqual(updated['chatstatus'], 'failed')
+                    self.assertEqual(updated['verification_status'],
+                                     verification if verification in ('completed', 'failed') else 'failed')
+        for terminal in ('completed', 'failed', 'cancelled', 'idle', 'paused'):
+            metadata = {**original, 'status': terminal, 'chatstatus': terminal,
+                        'verification_status': 'completed'}
+            _write_metadata(path, metadata)
+            self.manager._mark_unfinished(task_id)
+            self.assertEqual(json.loads(path.read_text()), metadata)
 
     async def test_id_collision_retry(self):
         # 同日随机部分碰撞时重新取随机值，数据库和目录均不覆盖。
@@ -713,7 +828,7 @@ class ApiTests(unittest.TestCase):
                 status(task, 'completed')
             with patch.object(config, 'VIP_TASK_DIR', root / 'tasks'), \
                  patch.dict('os.environ', {'VIP_PROJECT_DB': str(root / 'map.sqlite3')}), \
-                 patch.object(FileSources, 'search', return_value=[item(source)]), \
+                 patch.object(Keti2Sources, 'search', return_value=[item(source)]), \
                  patch.object(Task, 'run', fake_run), TestClient(create_app(backend_only=True)) as client:
                 self.assertEqual(client.get('/project/get_progress', params={'projectID': 'unknown'}).status_code, 404)
                 self.assertEqual(client.post('/project/create_project', json={'projectID': ''}).status_code, 422)

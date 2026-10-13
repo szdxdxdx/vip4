@@ -16,7 +16,7 @@ const { projectID, source, prompt, progress, results, error, busy, polling, subm
           <option value="keti2">课题二（多个IP）</option>
           <option value="keti3">课题三（合成代码单IP）</option>
         </select>
-        <p v-if="source === 'keti3'" class="project-hint">按项目 ID 通过 POST /api/verify 下载已有合成产物的全部 ZIP，构建单个任务（IP 标识 keti3:项目ID），不调用 synthesize。原始 ZIP 保存为任务根目录 keti3.zip；全部文件解压到 input 并保留目录。IR 目录为形式模型，根目录 C/H 为主 IP，iplib 为依赖；缺少 IR 时由 Agent 明确报告缺模型。</p>
+        <p v-if="source === 'keti3'" class="project-hint">按项目 ID 通过 POST /api/verify 打包已有合成产物，下载 ZIP 并使用其中全部文件，构建单个任务（IP 标识 keti3:项目ID），不调用 synthesize。原始 ZIP 保存为任务根目录 keti3.zip；全部文件解压到 input 并保留目录。IR 目录为形式模型，根目录 C/H 为主 IP，iplib 为依赖；缺少 IR 时由 Agent 明确报告缺模型。</p>
         <label for="project-id">项目 ID</label>
         <input id="project-id" v-model="projectID" autocomplete="off" placeholder="输入项目 ID" />
         <label for="project-prompt">提示词（可选）</label>

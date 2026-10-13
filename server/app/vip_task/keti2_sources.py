@@ -1,4 +1,4 @@
-"""项目接口及输入文件来源；本机文件及课题二文件下载。"""
+"""课题二 IP 查询及输入收集；支持本机文件、路径映射和 HTTP 下载。"""
 import csv
 import json
 import logging
@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
+
+from . import config as settings
 
 logger = logging.getLogger(__name__)
 FIELDS = (
@@ -21,10 +23,10 @@ FIELDS = (
 
 
 @dataclass
-class SourceConfig:
-    search_url: str = 'http://8.130.30.48:8877/api/search/searchSoftwareIPByProjectId'
+class Keti2Config:
+    search_url: str = field(default_factory=lambda: settings.KETI2_SEARCH_URL)
     path_map: dict[str, str] = field(default_factory=dict)
-    download_url: str = 'http://8.130.30.48:8877/api/file/downloadFile'
+    download_url: str = field(default_factory=lambda: settings.KETI2_DOWNLOAD_URL)
     timeout: float = 30
 
     @classmethod
@@ -35,16 +37,14 @@ class SourceConfig:
         ):
             raise ValueError('VIP_SOURCE_PATH_MAP 必须为非空路径前缀到本机目录的 JSON 对象')
         return cls(
-            search_url=os.getenv('VIP_PROJECT_SEARCH_URL', cls.search_url),
             path_map=mapping,
-            download_url=os.getenv('VIP_SOURCE_DOWNLOAD_URL', cls.download_url),
             timeout=float(os.getenv('VIP_SOURCE_TIMEOUT', '30')),
         )
 
 
-class FileSources:
-    def __init__(self, config: SourceConfig | None = None):
-        self.config = config or SourceConfig.from_env()
+class Keti2Sources:
+    def __init__(self, config: Keti2Config | None = None):
+        self.config = config or Keti2Config.from_env()
 
     def search(self, project_id: str) -> list[dict]:
         separator = '&' if '?' in self.config.search_url else '?'

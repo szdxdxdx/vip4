@@ -12,7 +12,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 from . import config
-from .file_sources import FileSources
+from .keti2_sources import Keti2Sources
 from .keti3_sources import Keti3Sources
 from .task import Task, TaskExistsError, TaskNotFoundError, _write_metadata
 
@@ -67,14 +67,16 @@ class ProjectStore:
 
 class ProjectManager:
     def __init__(self, task_manager, store: ProjectStore | None = None,
-                 sources: FileSources | None = None, keti3_sources: Keti3Sources | None = None):
+                 keti2_sources: Keti2Sources | None = None, keti3_sources: Keti3Sources | None = None):
         self.task_manager = task_manager
-        self.sources = sources or FileSources()
+        self.keti2_sources = keti2_sources or Keti2Sources()
         self.keti3_sources = keti3_sources or Keti3Sources()
         self.store = store or ProjectStore(Path(os.getenv(
             'VIP_PROJECT_DB', str(config.VIP_TASK_DIR.parent / 'projects.sqlite3'))))
         self.projects: dict[str, dict] = {}
         self.jobs: dict[str, asyncio.Task] = {}
+        # 映射写入及回滚同时失败时保留归属，供本进程查询和再次清理。
+        self.unmapped: dict[str, list[dict]] = {}
         self.closed = False
         # 删除与强制重建共用并发保护，直到独立清理协程结束才释放。
         self.resets: dict[str, asyncio.Task] = {}
@@ -86,9 +88,11 @@ class ProjectManager:
             raise ProjectConflictError('服务正在关闭')
         if project_id in self.resets:
             raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
-        exists = project_id in self.projects or self.store.tasks(project_id)
+        exists = project_id in self.projects or self._entries(project_id)
         if exists and not force:
             raise ProjectConflictError('项目已提交；可选择强制提交删除旧任务并重新验证')
+        if source == 'keti3':
+            self.keti3_sources.validate(project_id)
         if not force:
             return self._start(project_id, prompt, source)
         return await self._operation(project_id, self._replace(project_id, prompt, source))
@@ -98,7 +102,7 @@ class ProjectManager:
             raise ProjectConflictError('服务正在关闭')
         if project_id in self.resets:
             raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
-        if project_id not in self.projects and not self.store.tasks(project_id):
+        if project_id not in self.projects and not self._entries(project_id):
             raise ProjectNotFoundError('项目不存在')
         return await self._operation(project_id, self._delete(project_id), 'deleting')
 
@@ -148,13 +152,15 @@ class ProjectManager:
                 await asyncio.gather(job, return_exceptions=True)
             # 旧编排的 finally 可能写 cancelled，保持清理状态直至删除完成。
             self.projects[project_id] = state
-            for task_id in self.store.tasks(project_id):
+            for entry in self._entries(project_id):
+                task_id = entry['task_id']
                 try:
                     await self.task_manager.delete_task(task_id)
                 except TaskNotFoundError:
                     pass
             # 文件全部删除成功后才移除映射；失败时保留归属供查询及重试。
             self.store.remove(project_id)
+            self.unmapped.pop(project_id, None)
             self.jobs.pop(project_id, None)
             logger.info('旧项目任务已清理 projectID=%s', project_id)
         except Exception as error:
@@ -195,12 +201,25 @@ class ProjectManager:
             try:
                 self.store.add(task_id, project_id, ip_id)
             except Exception:
-                self._mark_unfinished(task_id)
+                try:
+                    # 尚未准备输入或启动，无异步资源；删除成功后才移除缓存。
+                    self.task_manager.tasks[task_id].delete_files()
+                    self.task_manager.tasks.pop(task_id, None)
+                except Exception:
+                    self.unmapped.setdefault(project_id, []).append(
+                        {'task_id': task_id, 'ip_id': ip_id})
+                    self._mark_unfinished(task_id)
+                    logger.exception('创建回滚失败，保留内存归属供清理重试 projectID=%s task_id=%s',
+                                     project_id, task_id)
                 raise
             return task_id
         raise RuntimeError('无法分配任务 ID：碰撞重试次数超限')
 
     def _mark_unfinished(self, task_id: str, status: str = 'cancelled'):
+        # 原验证结束后可能已开始续聊；活跃 job 的状态由任务自身维护。
+        task = self.task_manager.tasks.get(task_id)
+        if task is not None and task.job is not None and not task.job.done():
+            return
         # 尚未执行的任务也必须落盘为 cancelled，不能留下假运行状态。
         path = config.VIP_TASK_DIR / task_id / 'task.json'
         if not path.exists():
@@ -209,13 +228,17 @@ class ProjectManager:
             metadata = json.loads(path.read_text(encoding='utf-8'))
             if metadata['status'] in ('created', 'queued', 'running'):
                 metadata['status'] = status
+                metadata['chatstatus'] = status
+                # 初始化验证结论或结束未完成验证，不覆盖已完成验证后的聊天结论。
+                if metadata.get('verification_status', 'created') in ('created', 'queued', 'running'):
+                    metadata['verification_status'] = status
                 _write_metadata(path, metadata)
         except (OSError, ValueError, KeyError):
             logger.exception('无法更新任务状态 task_id=%s status=%s', task_id, status)
 
     async def _run(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
         state = self.projects[project_id]
-        sources = self.keti3_sources if source == 'keti3' else self.sources
+        sources = self.keti3_sources if source == 'keti3' else self.keti2_sources
         try:
             state['status'] = 'collecting'
             items = await self._blocking(sources.search, project_id)
@@ -274,8 +297,8 @@ class ProjectManager:
             state.update(status='failed', error=str(error))
             logger.exception('项目执行失败 projectID=%s', project_id)
         finally:
-            for task_id in self.store.tasks(project_id):
-                self._mark_unfinished(task_id)
+            for entry in self._entries(project_id):
+                self._mark_unfinished(entry['task_id'])
             logger.info('项目状态 projectID=%s status=%s', project_id, state['status'])
 
     def _task(self, task_id: str) -> dict:
@@ -289,8 +312,14 @@ class ProjectManager:
         except TaskNotFoundError:
             return {'task_id': task_id, 'status': 'deleted'}
 
-    def progress(self, project_id: str) -> dict:
+    def _entries(self, project_id: str) -> list[dict]:
         entries = self.store.entries(project_id)
+        mapped = {entry['task_id'] for entry in entries}
+        return entries + [entry for entry in self.unmapped.get(project_id, [])
+                          if entry['task_id'] not in mapped]
+
+    def progress(self, project_id: str) -> dict:
+        entries = self._entries(project_id)
         state = self.projects.get(project_id)
         if not entries and state is None:
             raise ProjectNotFoundError('项目不存在')
