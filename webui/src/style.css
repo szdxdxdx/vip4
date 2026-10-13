@@ -829,7 +829,7 @@ iframe {
 .project-panel { flex:1; min-height:0; overflow:auto; padding:10px; display:grid; grid-template-columns:minmax(260px,340px) minmax(0,1fr); gap:10px; align-items:start }
 .project-input,.project-output { padding:16px }
 .project-input form { display:flex; flex-direction:column; gap:10px; margin:16px 0 }
-.project-input input,.project-input textarea { width:100%; border:1px solid var(--line); padding:8px; border-radius:0; background:#fff; color:inherit }
+.project-input input,.project-input textarea,.project-input select { width:100%; border:1px solid var(--line); padding:8px; border-radius:0; background:#fff; color:inherit }
 .project-input textarea { resize:vertical }
 .project-hint { color:var(--muted); line-height:1.7; margin:8px 0 }
 .project-error { color:#a52828; white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 }

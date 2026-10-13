@@ -1420,3 +1420,201 @@ test('项目任务的暂停和普通聊天状态有明确标签', async () => {
   assert.equal(projectLabels.paused, '已暂停')
   assert.equal(projectLabels.idle, '对话结束')
 })
+
+
+test('来源 API 默认不扩展课题二 body，课题三含 source，项目删除 POST 及 404/409', async () => {
+  const calls = [], signal = new AbortController().signal
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    return response({ projectID: '中 /#', status: url.endsWith('delete_project') ? 'deleted' : 'accepted' })
+  }
+  await projectApi.createProject('中 /#', '', signal, false, 'keti2')
+  await projectApi.createProject('中 /#', '自定义', signal, true, 'keti3')
+  const deleted = await projectApi.deleteProject('中 /#', signal)
+  assert.deepEqual(JSON.parse(calls[0].options.body), { projectID: '中 /#' })
+  assert.deepEqual(JSON.parse(calls[1].options.body), { projectID: '中 /#', prompt: '自定义', force: true, source: 'keti3' })
+  assert.equal(calls[2].url, '/project/delete_project')
+  assert.equal(calls[2].options.method, 'POST')
+  assert.equal(calls[2].options.signal, signal)
+  assert.deepEqual(JSON.parse(calls[2].options.body), { projectID: '中 /#' })
+  assert.deepEqual(deleted, { projectID: '中 /#', status: 'deleted' })
+  for (const status of [404, 409]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({ detail: status === 404 ? '项目不存在' : '项目正在清理' }), { status })
+    await assert.rejects(projectApi.deleteProject('p', signal), /项目不存在|项目正在清理/)
+  }
+})
+
+test('切来源隔离旧进度与结果；课题三提交和查询来源取实际响应', async () => {
+  const { app, p } = mountedProject()
+  const oldProgress = deferred(), oldResults = deferred(), calls = []
+  let phase = 'old-progress'
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    if (phase === 'old-progress') return oldProgress.promise
+    if (url.includes('create_project')) return response({ projectID: 'demo', status: 'accepted' })
+    if (url.includes('get_results') && phase === 'old-results') return oldResults.promise
+    return response(url.includes('get_progress') ? { ...projectProgress('demo', 'completed'), source: 'keti2' } : projectResults('demo'))
+  }
+  try {
+    assert.equal(p.source.value, 'keti2')
+    p.projectID.value = 'demo'; p.query()
+    p.source.value = 'keti3'; p.query()
+    assert.equal(calls[0].options.signal.aborted, true)
+    assert.equal(calls.length, 1)
+    phase = 'new'
+    oldProgress.resolve(response({ ...projectProgress('demo', 'failed'), source: 'keti2' }))
+    await flushProject()
+    phase = 'old-results'; p.submit(); await flushProject()
+    assert.deepEqual(JSON.parse(calls.find(call => call.url.includes('create_project')).options.body), { projectID: 'demo', source: 'keti3' })
+    assert.equal(p.progress.value.source, 'keti2') // 实际来源优先，不假定选项即来源。
+    p.source.value = 'keti2'
+    assert.equal(p.progress.value, null)
+    assert.equal(calls.at(-1).options.signal.aborted, true)
+    oldResults.resolve(response(projectResults('demo'))); await flushProject()
+    assert.equal(p.results.value, null)
+    assert.equal(p.polling.value, false)
+    phase = 'new'; p.query(); await flushProject()
+    assert.equal(p.progress.value.source, 'keti2')
+  } finally { app.unmount() }
+})
+
+test('删除取消、重复阻止、失败保留展示与查询重试，隐藏成功清除快照', async () => {
+  let changed = 0, confirmed = false, deleting
+  const { app, p, active } = mountedProject(() => changed++)
+  const calls = []
+  globalThis.window = { confirm: text => { assert.match(text, /永久删除项目.*不可恢复/); return confirmed } }
+  globalThis.fetch = async url => {
+    calls.push(url)
+    if (url.endsWith('delete_project')) return deleting.promise
+    return response(url.includes('get_progress') ? projectProgress('demo', 'completed') : projectResults('demo'))
+  }
+  try {
+    p.projectID.value = 'demo'; p.query(); await flushProject()
+    const old = p.results.value
+    p.removeProject(); assert.equal(calls.length, 2)
+    confirmed = true; deleting = deferred(); p.removeProject(); p.removeProject(); p.forceSubmit()
+    assert.equal(calls.length, 3)
+    assert.equal(p.busy.value, true)
+    deleting.resolve(new Response(JSON.stringify({ detail: '并发清理' }), { status: 409 })); await flushProject()
+    assert.equal(changed, 0)
+    assert.equal(p.results.value, old)
+    assert.match(p.error.value, /并发清理/)
+    assert.equal(p.polling.value, false)
+    p.query(); await flushProject(); assert.equal(p.error.value, '')
+    deleting = deferred(); p.removeProject(); active.value = false
+    deleting.resolve(response({ projectID: 'demo', status: 'deleted' })); await flushProject()
+    assert.equal(changed, 1)
+    assert.equal(p.progress.value, null)
+    assert.equal(p.results.value, null)
+    const count = calls.length
+    active.value = true; await flushProject()
+    assert.equal(calls.length, count)
+    assert.equal(p.projectID.value, 'demo')
+  } finally { app.unmount() }
+})
+
+test('切 ID 后迟到删除仍刷新历史但不污染新项目，force 后查询失败无旧结果', async () => {
+  let changed = 0, phase = 'query'
+  const deletion = deferred(), { app, p } = mountedProject(() => changed++)
+  globalThis.window = { confirm: text => { if (text.startsWith('强制')) assert.match(text, /两来源共用项目 ID，切换来源/); return true } }
+  globalThis.fetch = async url => {
+    if (url.endsWith('delete_project')) return deletion.promise
+    if (url.endsWith('create_project')) return response({ projectID: 'B', status: 'accepted' })
+    if (phase === 'fail') throw new Error('查询暂不可用')
+    const id = new URL(url, 'http://local').searchParams.get('projectID')
+    return response(url.includes('get_progress') ? projectProgress(id, 'completed') : projectResults(id))
+  }
+  try {
+    p.projectID.value = 'A'; p.query(); await flushProject()
+    p.removeProject(); p.projectID.value = 'B'; p.query()
+    deletion.resolve(response({ projectID: 'A', status: 'deleted' })); await flushProject()
+    assert.equal(changed, 1)
+    assert.equal(p.progress.value.projectID, 'B')
+    assert.equal(p.results.value.projectID, 'B')
+    phase = 'fail'; p.forceSubmit(); await flushProject()
+    assert.equal(changed, 2)
+    assert.equal(p.progress.value, null)
+    assert.equal(p.results.value, null)
+    assert.match(p.error.value, /查询暂不可用/)
+    phase = 'query'; p.query(); await flushProject()
+    assert.equal(p.results.value.projectID, 'B')
+  } finally { app.unmount() }
+})
+
+
+test('项目组件来源选项、课题三说明、实际来源与 deleting 标签、删除按钮接线', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}; globalThis.ShadowRoot = class {}
+  let changed = 0
+  const rootElement = {}, app = renderer.createApp(ProjectPanel, { active: true, onForced: () => changed++ })
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async url => response(url.endsWith('delete_project') ? { projectID: 'demo', status: 'deleted' }
+    : url.includes('get_progress') ? { ...projectProgress('demo', 'deleting'), source: 'keti3', tasks: [{ task_id: 't', ip_id: 'keti3:demo', status: 'completed' }] }
+    : { projectID: 'demo', tasks: [] })
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  try {
+    app.mount(rootElement)
+    const select = nodes().find(el => el.props?.id === 'project-source')
+    assert.deepEqual(descendants(select).filter(el => el.tag === 'option').map(el => el.props.value), ['keti2', 'keti3'])
+    select.props['onUpdate:modelValue']('keti3'); await nextTick()
+    assert.ok(nodes().some(el => /不调用 synthesize.*IR 目录.*缺模型/.test(el.text)))
+    nodes().find(el => el.props?.id === 'project-id').props['onUpdate:modelValue']('demo'); await nextTick()
+    nodes().find(el => el.tag === 'button' && el.text === '查询已有项目').props.onClick(); await flushProject()
+    assert.ok(nodes().some(el => el.tag === 'strong' && el.text === '删除中'))
+    assert.ok(nodes().some(el => el.text === '来源：课题三（合成代码单IP）'))
+    assert.ok(nodes().some(el => el.tag === 'h3' && el.text === 'keti3:demo'))
+    nodes().find(el => el.tag === 'button' && el.text === '删除项目').props.onClick(); await flushProject()
+    assert.equal(changed, 1)
+    assert.equal(nodes().some(el => el.tag === 'article'), false)
+  } finally {
+    app.unmount(); globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
+})
+
+test('App 项目删除刷新列表、隔离旧列表，保留其他手动任务选择与聊天和创建草稿', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}; globalThis.ShadowRoot = class {}
+  const streams = [], oldList = deferred(), deletion = deferred(), requests = []
+  let phase = 'old'
+  const task = id => ({ task_id: id, prompt: id, status: 'running' })
+  globalThis.window = { confirm: () => true }
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push(url)
+    if (url === '/task/list_tasks') return phase === 'late' ? oldList.promise : response({ tasks: (phase === 'new' ? ['MANUAL'] : ['MANUAL', 'demo-task']).map(task) })
+    if (url === '/project/delete_project') return deletion.promise
+    if (url.startsWith('/project/')) return response(url.includes('get_progress') ? projectProgress('demo', 'completed') : projectResults('demo'))
+    const id = new URL(url, 'http://local').searchParams.get('task_id')
+    if (url.startsWith('/task/get_task')) return response({ task: task(id), files: [] })
+    return new Response(new ReadableStream({ start(c) { streams.push({ c, signal: options.signal }) } }))
+  }
+  const rootElement = {}, app = renderer.createApp(App)
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  const button = label => nodes().find(el => el.tag === 'button' && el.text === label)
+  try {
+    app.mount(rootElement); await waitFor(() => streams.length === 1)
+    const chat = nodes().find(el => el.props?.id === 'chat-message')
+    chat.props.onInput({ target: { value: '手动聊天草稿' } })
+    const composer = nodes().find(el => el.tag === 'textarea' && !el.props?.id)
+    composer.props['onUpdate:modelValue']('手动创建草稿'); await nextTick()
+    phase = 'late'; button('刷新').props.onClick()
+    button('项目验证').props.onClick(); await nextTick()
+    nodes().find(el => el.props?.id === 'project-id').props['onUpdate:modelValue']('demo'); await nextTick()
+    button('查询已有项目').props.onClick(); await flushProject()
+    button('删除项目').props.onClick()
+    phase = 'new'; deletion.resolve(response({ projectID: 'demo', status: 'deleted' }))
+    await waitFor(() => streams.length === 2); await flushProject()
+    oldList.resolve(response({ tasks: [task('demo-task')] })); await flushProject()
+    assert.equal(nodes().some(el => el.tag === 'strong' && el.text === 'demo-task'), false)
+    const selected = nodes().find(el => el.props?.class?.includes('task-select') && el.props['aria-current'] === 'true')
+    assert.ok(descendants(selected).some(el => el.text === 'MANUAL'))
+    assert.equal(chat.props.value, '手动聊天草稿')
+    assert.equal(composer.value, '手动创建草稿')
+    assert.equal(nodes().some(el => el.tag === 'article' && el.props.class === 'project-task'), false)
+    assert.ok(requests.filter(url => url === '/task/list_tasks').length >= 3)
+  } finally {
+    app.unmount(); streams.forEach(({ c }) => { try { c.close() } catch {} })
+    globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot
+  }
+})

@@ -1,4 +1,4 @@
-import type { ProjectProgress, ProjectResults } from './projectTypes'
+import type { ProjectProgress, ProjectResults, ProjectSource } from './projectTypes'
 
 async function request<T>(url: string, options: RequestInit): Promise<T> {
   const response = await fetch(url, options)
@@ -12,10 +12,16 @@ async function request<T>(url: string, options: RequestInit): Promise<T> {
   }
   return response.json()
 }
-export function createProject(projectID: string, prompt: string, signal: AbortSignal, force = false) {
+export function createProject(projectID: string, prompt: string, signal: AbortSignal, force = false, source: ProjectSource = 'keti2') {
   return request<{ projectID: string; status: 'accepted' }>('/project/create_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, ...(force ? { force: true } : {}), ...(prompt.trim() ? { prompt } : {}) }),
+    body: JSON.stringify({ projectID, ...(source === 'keti3' ? { source } : {}), ...(force ? { force: true } : {}), ...(prompt.trim() ? { prompt } : {}) }),
+  })
+}
+export function deleteProject(projectID: string, signal: AbortSignal) {
+  return request<{ projectID: string; status: 'deleted' }>('/project/delete_project', {
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectID }),
   })
 }
 export function getProjectProgress(id: string, signal: AbortSignal) {

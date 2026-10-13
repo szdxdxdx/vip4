@@ -1,4 +1,6 @@
-export type ProjectStatus = 'accepted' | 'resetting' | 'collecting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'empty'
+export type ProjectSource = 'keti2' | 'keti3'
+export const sourceLabels: Record<ProjectSource, string> = { keti2: '课题二（多个IP）', keti3: '课题三（合成代码单IP）' }
+export type ProjectStatus = 'accepted' | 'deleting' | 'resetting' | 'collecting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'empty'
 export type ProjectTaskStatus = 'idle' | 'paused' | 'created' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'deleted'
 export interface ProjectTask {
   task_id: string
@@ -11,6 +13,7 @@ export interface ProjectTask {
 }
 export interface ProjectProgress {
   projectID: string
+  source?: ProjectSource
   status: ProjectStatus
   error?: string
   total: number
@@ -23,7 +26,7 @@ export interface ProjectResults {
   tasks: { task_id: string; ip_id?: string; status: ProjectTaskStatus; files: ProjectFile[] }[]
 }
 export const projectLabels: Record<ProjectStatus | ProjectTaskStatus, string> = {
-  accepted: '已受理', resetting: '重置中', collecting: '收集中', running: '验证中', completed: '已完成',
+  accepted: '已受理', deleting: '删除中', resetting: '重置中', collecting: '收集中', running: '验证中', completed: '已完成',
   idle: '对话结束', paused: '已暂停', failed: '失败', cancelled: '已取消', empty: '无任务', created: '已创建', queued: '排队中', deleted: '已删除',
 }
 export const isProjectTerminal = (status: ProjectStatus) =>

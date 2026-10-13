@@ -8,10 +8,12 @@ import string
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlencode
 
 from . import config
 from .file_sources import FileSources
+from .keti3_sources import Keti3Sources
 from .task import Task, TaskExistsError, TaskNotFoundError, _write_metadata
 
 logger = logging.getLogger(__name__)
@@ -65,27 +67,44 @@ class ProjectStore:
 
 class ProjectManager:
     def __init__(self, task_manager, store: ProjectStore | None = None,
-                 sources: FileSources | None = None):
+                 sources: FileSources | None = None, keti3_sources: Keti3Sources | None = None):
         self.task_manager = task_manager
         self.sources = sources or FileSources()
+        self.keti3_sources = keti3_sources or Keti3Sources()
         self.store = store or ProjectStore(Path(os.getenv(
             'VIP_PROJECT_DB', str(config.VIP_TASK_DIR.parent / 'projects.sqlite3'))))
         self.projects: dict[str, dict] = {}
         self.jobs: dict[str, asyncio.Task] = {}
         self.closed = False
+        # 删除与强制重建共用并发保护，直到独立清理协程结束才释放。
         self.resets: dict[str, asyncio.Task] = {}
+        self._close_job: asyncio.Task | None = None
 
-    async def submit(self, project_id: str, prompt: str | None = None, *, force: bool = False):
+    async def submit(self, project_id: str, prompt: str | None = None, *, force: bool = False,
+                     source: Literal['keti2', 'keti3'] = 'keti2'):
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
         if project_id in self.resets:
-            raise ProjectConflictError('项目正在强制重建，请稍后重试')
+            raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
         exists = project_id in self.projects or self.store.tasks(project_id)
         if exists and not force:
             raise ProjectConflictError('项目已提交；可选择强制提交删除旧任务并重新验证')
         if not force:
-            return self._start(project_id, prompt)
-        operation = asyncio.create_task(self._replace(project_id, prompt))
+            return self._start(project_id, prompt, source)
+        return await self._operation(project_id, self._replace(project_id, prompt, source))
+
+    async def delete(self, project_id: str):
+        if self.closed:
+            raise ProjectConflictError('服务正在关闭')
+        if project_id in self.resets:
+            raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
+        if project_id not in self.projects and not self.store.tasks(project_id):
+            raise ProjectNotFoundError('项目不存在')
+        return await self._operation(project_id, self._delete(project_id), 'deleting')
+
+    async def _operation(self, project_id: str, cleanup, status: str = 'resetting'):
+        self.projects[project_id] = {**self.projects.get(project_id, {}), 'status': status}
+        operation = asyncio.create_task(cleanup)
         self.resets[project_id] = operation
         def finished(job):
             # 并发保护由清理操作释放，不受 HTTP 请求重复取消影响。
@@ -96,25 +115,39 @@ class ProjectManager:
         operation.add_done_callback(finished)
         return await asyncio.shield(operation)
 
-    def _start(self, project_id: str, prompt: str | None):
+    def _start(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
-        self.projects[project_id] = {'status': 'accepted'}
-        self.jobs[project_id] = asyncio.create_task(self._run(project_id, prompt))
+        self.projects[project_id] = {'status': 'accepted', 'source': source}
+        self.jobs[project_id] = asyncio.create_task(self._run(project_id, prompt, source))
         logger.info('项目已接受 projectID=%s', project_id)
         return {'projectID': project_id, 'status': 'accepted'}
 
-    async def _replace(self, project_id: str, prompt: str | None):
-        self.projects[project_id] = {'status': 'resetting'}
-        logger.info('开始强制重建 projectID=%s', project_id)
+    async def _replace(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
+        await self._cleanup(project_id, 'resetting')
+        try:
+            return self._start(project_id, prompt, source)
+        except Exception as error:
+            self.projects[project_id] = {'status': 'failed', 'error': str(error), 'requires_resubmit': True}
+            raise
+
+    async def _delete(self, project_id: str):
+        await self._cleanup(project_id, 'deleting')
+        self.projects.pop(project_id, None)
+        return {'projectID': project_id, 'status': 'deleted'}
+
+    async def _cleanup(self, project_id: str, status: str):
+        state = {**self.projects.get(project_id, {}), 'status': status}
+        self.projects[project_id] = state
+        logger.info('开始项目清理 projectID=%s status=%s', project_id, status)
         try:
             job = self.jobs.get(project_id)
             if job is not None:
                 if not job.done():
                     job.cancel()
                 await asyncio.gather(job, return_exceptions=True)
-            # 旧编排的 finally 可能写 cancelled，保持重建状态直至删除完成。
-            self.projects[project_id] = {'status': 'resetting'}
+            # 旧编排的 finally 可能写 cancelled，保持清理状态直至删除完成。
+            self.projects[project_id] = state
             for task_id in self.store.tasks(project_id):
                 try:
                     await self.task_manager.delete_task(task_id)
@@ -124,10 +157,9 @@ class ProjectManager:
             self.store.remove(project_id)
             self.jobs.pop(project_id, None)
             logger.info('旧项目任务已清理 projectID=%s', project_id)
-            return self._start(project_id, prompt)
         except Exception as error:
-            self.projects[project_id] = {'status': 'failed', 'error': f'强制重建失败：{error}', 'requires_resubmit': True}
-            logger.exception('强制重建失败 projectID=%s', project_id)
+            self.projects[project_id] = {**state, 'status': 'failed', 'error': f'项目清理失败：{error}', 'requires_resubmit': True}
+            logger.exception('项目清理失败 projectID=%s', project_id)
             raise
 
     async def _blocking(self, call, *args):
@@ -181,11 +213,12 @@ class ProjectManager:
         except (OSError, ValueError, KeyError):
             logger.exception('无法更新任务状态 task_id=%s status=%s', task_id, status)
 
-    async def _run(self, project_id: str, prompt: str | None):
+    async def _run(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
         state = self.projects[project_id]
+        sources = self.keti3_sources if source == 'keti3' else self.sources
         try:
             state['status'] = 'collecting'
-            items = await self._blocking(self.sources.search, project_id)
+            items = await self._blocking(sources.search, project_id)
             if not items:
                 state['status'] = 'empty'
                 return
@@ -199,7 +232,10 @@ class ProjectManager:
                     for key in ('ipMsg', 'entity', 'basicInformation', 'id'):
                         value = value.get(key) if isinstance(value, dict) else None
                     ip_id = value.strip() if isinstance(value, str) else ''
-                    pairs.append((self._create(project_id, prompt, ip_id), item))
+                    task_prompt = prompt
+                    if source == 'keti3':
+                        task_prompt = '\n'.join(filter(None, (item['_verification_prompt'], prompt)))
+                    pairs.append((self._create(project_id, task_prompt, ip_id), item))
                 except Exception as error:
                     state['requires_resubmit'] = True
                     errors.append(f'IP {item["ipId"]} 创建失败：{error}')
@@ -207,7 +243,7 @@ class ProjectManager:
             ready = []
             for task_id, item in pairs:
                 try:
-                    await self.task_manager.prepare_task(task_id, self.sources.collect, item,
+                    await self.task_manager.prepare_task(task_id, sources.collect, item,
                                                          config.VIP_TASK_DIR / task_id)
                     ready.append(task_id)
                 except Exception as error:
@@ -255,13 +291,14 @@ class ProjectManager:
 
     def progress(self, project_id: str) -> dict:
         entries = self.store.entries(project_id)
-        state = {'status': 'resetting'} if project_id in self.resets else self.projects.get(project_id)
+        state = self.projects.get(project_id)
         if not entries and state is None:
             raise ProjectNotFoundError('项目不存在')
         tasks = [{**self._task(entry['task_id']), 'ip_id': entry['ip_id']} for entry in entries]
         if tasks and state is not None and not state.get('requires_resubmit') and state['status'] in ('completed', 'failed', 'cancelled'):
             if all(task['status'] == 'completed' for task in tasks):
-                state = {'status': 'completed'}
+                state = {**state, 'status': 'completed'}
+                state.pop('error', None)
         if state is None:
             statuses = [task['status'] for task in tasks]
             status = ('completed' if all(s == 'completed' for s in statuses) else
@@ -289,6 +326,13 @@ class ProjectManager:
 
     async def close(self):
         self.closed = True
+        if self._close_job is None:
+            self._close_job = asyncio.create_task(self._close())
+            self._close_job.add_done_callback(lambda job: None if job.cancelled() else job.exception())
+        # 关闭调用被取消也不能打断清理或提前关闭 SQLite。
+        await asyncio.shield(self._close_job)
+
+    async def _close(self):
         # 等待已接受的永久清理；_start 会拒绝关闭期间启动新项目。
         await asyncio.gather(*list(self.resets.values()), return_exceptions=True)
         for job in self.jobs.values():
