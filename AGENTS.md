@@ -33,7 +33,7 @@ AI Agent 依照 SKILL 的指导，调用 MCP 提供的工具，完成软件 IP �
 - ProjectStore：SQLite 保存 task_id、projectID、keti、timestamp 及实体模型基本信息的 id（ip_id）；本地任务 projectID、keti 为 NULL，历史 keti 保持 NULL；名称保存在任务元数据，项目进度由元数据汇总
 - service：主要负责对外提供服务接口
   - api：主要负责对外提供 HTTP 接口
-- tmp_keti3.py：课题三接口未公开时的临时后端，模拟打包与下载接口，只服务 tmp/NWM_synthesis.zip 与唯一 projectID
+- tmp_keti3：课题三接口未公开时的临时后端目录，模拟打包与下载接口，只服务同目录的 NWM_synthesis.zip 与唯一 projectID
 
 后端程序会加载编译好的 html 页面。启动后端，能同时启动后端服务和前端页面
 使用 `--backend-only` 参数则只启动后端服务（开发时用）

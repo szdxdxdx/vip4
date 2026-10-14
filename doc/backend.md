@@ -56,7 +56,7 @@
 
 ## 课题三输入
 
-`server/tmp_keti3.py` 是临时文件服务，只服务唯一 projectID 和 `tmp/NWM_synthesis.zip`。运行 `python3 server/tmp_keti3.py`，默认 127.0.0.1:50053。正式对接时修改业务配置地址。
+`server/tmp_keti3/` 是临时文件服务，只服务唯一 projectID 和同目录的 `NWM_synthesis.zip`。运行 `python3 server/tmp_keti3/tmp_keti3.py`，默认 127.0.0.1:50053。正式对接时修改业务配置地址。
 
 课题三调用 `POST /api/verify`，正文 `{project_id:"1001"}`，随后 GET 响应 zip_url；不调用 synthesize，不自行拼接远端路径。下载完整 ZIP 保存为任务根目录 keti3.zip，全部产物视为一个 IP，解压到 input 保留路径和原编码，files.csv 记录 ZIP 和所有文件。拒绝路径穿越、符号链接、特殊文件、重复路径与覆盖；下载上限 256 MiB，解压上限 1 GiB，条目上限 10000。
 

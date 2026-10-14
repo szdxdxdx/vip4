@@ -1,7 +1,7 @@
-"""课题三临时后端：模拟打包接口，只服务 `tmp/NWM_synthesis.zip`。
+"""课题三临时后端：模拟打包接口，只服务同目录的 `NWM_synthesis.zip`。
 
-接口与 `/app/vip4/tmp/课题三接口.md` 一致：POST /api/verify 请求打包，GET /api/download/<文件> 下载压缩包。
-仅接受唯一 projectID，直接运行本脚本即可：`python3 tmp_keti3.py`
+接口与课题三打包接口一致：POST /api/verify 请求打包，GET /api/download/<文件> 下载压缩包。
+仅接受唯一 projectID，直接运行本脚本即可：`python3 tmp_keti3/tmp_keti3.py`
 """
 import json
 import logging
@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlsplit
 HOST = '127.0.0.1'
 PORT = 50053
 PROJECT_ID = '1001'
-ARCHIVE = Path(__file__).resolve().parents[1] / 'tmp' / 'NWM_synthesis.zip'
+ARCHIVE = Path(__file__).resolve().parents[0] / 'NWM_synthesis.zip'
 LOG_FORMAT = '%(asctime)s tmp_keti3 %(levelname)s %(message)s'
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
