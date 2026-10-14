@@ -11,4 +11,4 @@ def new_timestamp() -> str:
     global _last
     with _lock:
         _last = max(datetime.now(timezone.utc), _last + timedelta(microseconds=1))
-        return _last.strftime('%Y-%m-%d %H:%M:%S.%f')
+        return _last.strftime('%Y-%m-%d %H:%M:%S')

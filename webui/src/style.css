@@ -748,9 +748,10 @@ iframe {
 .project-messages { border:2px solid var(--accent); padding:8px 10px; margin-top:10px; max-height:min(200px,30%); min-height:0; overflow:auto; overflow-wrap:anywhere }
 .project-messages h3 { font-size:14px; margin-bottom:6px }
 .project-messages p { margin:4px 0; font-size:12px; line-height:1.6 }
+.project-messages p + p { border-top:1px solid var(--line); padding-top:4px }
 .task-table { width:100%; border-collapse:collapse; font-size:12px; text-align:left; white-space:nowrap }
 .task-table th,.task-table td { padding:8px; border-bottom:1px solid var(--line); max-width:260px; overflow:hidden; text-overflow:ellipsis }
-.task-table th { color:var(--muted); font-weight:normal }
+.task-table th { position:sticky; top:0; z-index:1; background:#fff; color:var(--muted); font-weight:normal }
 .task-table button { padding:4px 8px; font-size:12px }
 .source-tag { color:var(--muted); font-size:10px; margin-right:6px }
 @media (max-width:760px) {

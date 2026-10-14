@@ -2,11 +2,11 @@
 import { computed, toRef } from 'vue'
 import { useProject } from '../composables/useProject'
 import { atticalPrompt } from '../templates/attical'
-import { taskStatusLabel, batchStatusLabel } from '../types'
+import { taskStatusLabel } from '../types'
 const props = defineProps<{ active: boolean }>()
 const emit = defineEmits<{ viewTask: [id: string]; changed: [] }>()
-const { batches, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, error, busy,
-  listError, loading, submit, refresh } = useProject(toRef(props, 'active'), () => emit('changed'))
+const { messages, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, busy,
+  loading, submit, refresh } = useProject(toRef(props, 'active'), () => emit('changed'))
 const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID.value.trim())
 </script>
 <template>
@@ -53,28 +53,23 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
       </form>
       <div class="task-table-scroll" :aria-busy="loading">
         <table class="task-table">
-          <thead><tr><th>projectID</th><th>taskID</th><th>timestamp（UTC）</th><th>IP 名字</th><th>验证情况</th><th>操作</th></tr></thead>
+          <thead><tr><th>taskID</th><th>projectID</th><th>IP 名字</th><th>验证情况</th><th title="UTC">时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="task in tasks" :key="task.task_id">
+              <td>{{ task.task_id }}</td>
               <td :title="task.projectID || '—'"><span v-if="task.keti" class="source-tag">{{ task.keti }}</span>{{ task.projectID || '—' }}</td>
-              <td>{{ task.task_id }}</td><td>{{ task.timestamp || '—' }}</td><td :title="task.ip_name || task.ip_id || '—'">{{ task.ip_name || task.ip_id || '—' }}</td>
+              <td :title="task.ip_name || task.ip_id || '—'">{{ task.ip_name || task.ip_id || '—' }}</td>
               <td>{{ task.missing_directory ? '实际目录已删除' : task.data_missing ? '任务数据缺失' : taskStatusLabel(task) }}</td>
+              <td>{{ task.timestamp || '—' }}</td>
               <td><button type="button" :disabled="task.missing_directory" @click="emit('viewTask', task.task_id)">查看详情</button></td>
             </tr>
           </tbody>
         </table>
-        <p v-if="!tasks.length" class="empty small">{{ loading ? '正在读取任务…' : '暂无任务。提交验证任务后，请手动刷新查询' }}</p>
+        <p v-if="!tasks.length" class="empty small">{{ loading ? '正在读取任务…' : '请手动刷新查询' }}</p>
       </div>
-      <section v-if="error || busy || listError || batches.length" class="project-messages" aria-labelledby="project-messages-title">
+      <section v-if="messages.length" class="project-messages" aria-labelledby="project-messages-title">
         <h3 id="project-messages-title">消息</h3>
-        <p v-if="busy" class="project-hint" role="status">请求中…</p>
-        <p v-if="error" class="project-error" role="alert">{{ error }}</p>
-        <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
-        <div v-if="batches.length" aria-label="本次会话提交批次">
-          <p v-for="batch in batches" :key="JSON.stringify([batch.keti, batch.projectID, batch.timestamp])" :class="batch.error ? 'project-error' : 'project-hint'" role="status">
-            <span v-if="batch.tasks?.length">{{ batch.tasks.map(task => task.task_id).join('、') }}：</span>{{ batchStatusLabel(batch.status) }}<span v-if="batch.error">；{{ batch.error }}</span>
-          </p>
-        </div>
+        <p v-for="message in messages" :key="message.id" :class="message.error ? 'project-error' : 'project-hint'" :role="message.error ? 'alert' : 'status'">{{ message.text }}</p>
       </section>
     </section>
   </main>

@@ -1133,7 +1133,7 @@ test('实际统一提交组件：点击才填模板、缺目录提示、NULL 项
     assert.match(prompt.value, /<input>\/ = \/app\/vip4\/tasks\/<task_id>\/input\//)
     assert.doesNotMatch(prompt.value, /dataset/)
     assert.ok(nodes().some(n => n.tag === 'td' && descendants(n).some(child => child.text === '—')))
-    assert.ok(nodes().some(n => n.tag === 'th' && n.text === 'timestamp（UTC）'))
+    assert.ok(nodes().some(n => n.tag === 'th' && n.text === '时间' && n.props.title === 'UTC'))
     assert.ok(nodes().some(n => n.tag === 'td' && n.text === '2026-10-14 00:00:00'))
     assert.ok(nodes().some(n => n.tag === 'td' && n.text === '实际目录已删除'))
     assert.equal(nodes().filter(n => n.props?.class === 'source-tag').length, 1)
@@ -1319,6 +1319,7 @@ test('真实项目组件消息集中：忙态、提交与查询错误、全部�
   globalThis.Document = class {}; globalThis.ShadowRoot = class {}
   const clock = projectClock(), rootElement = {}
   let serial = 0, rejectSubmit, failQuery = false
+  const active = reactive({ value: true })
   const batches = [
     { timestamp: 'timestamp-1', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-one' }] },
     { timestamp: 'timestamp-2', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-two' }, { task_id: 'task-three' }] },
@@ -1334,7 +1335,7 @@ test('真实项目组件消息集中：忙态、提交与查询错误、全部�
     }
     if (url.startsWith('/task/list_tasks')) {
       if (failQuery) throw new Error('查询失败')
-      return response({ tasks: [] })
+      return response({ tasks: [{ task_id: 'table-task', projectID: 'table-project', ip_name: 'table-ip', status: 'completed', timestamp: '2026-10-14 00:00:00' }] })
     }
     if (url.startsWith('/project/get_progress')) return response({ batches: [{ timestamp: 'historical', status: 'failed', tasks: [{ task_id: 'historical-task' }] }, ...batches] })
     assert.fail(url)
@@ -1343,9 +1344,13 @@ test('真实项目组件消息集中：忙态、提交与查询错误、全部�
   const nodes = () => descendants(rootElement)
   const text = node => (node.text === 'v-if' ? '' : node.text || '') + (node.children || []).map(text).join('')
   const messages = () => nodes().find(n => n.props?.class === 'project-messages')
-  const hints = () => nodes().find(n => n.props?.['aria-label'] === '本次会话提交批次').children
-    .filter(n => n.tag === 'p').map(n => text(n).trim())
-  const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: true }) } })
+  const rows = () => descendants(messages()).filter(n => n.tag === 'p')
+  const hints = () => rows().map(n => text(n).trim())
+  const query = async () => {
+    nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
+    await flushProject()
+  }
+  const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: active.value }) } })
   try {
     app.mount(rootElement); await flushProject()
     assert.equal(messages(), undefined)
@@ -1365,10 +1370,11 @@ test('真实项目组件消息集中：忙态、提交与查询错误、全部�
       nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
       await flushProject()
     }
-    assert.deepEqual(hints(), Array(batches.length).fill('已接受，等待下载'))
+    assert.deepEqual(hints(), ['请选择数据集 IP', ...Array(batches.length).fill(['请求中…', '已接受，等待下载']).flat()])
+    const acceptedRows = rows().slice()
     nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
     await flushProject()
-    assert.deepEqual(hints(), [
+    assert.deepEqual(hints().slice(-5), [
       'task-one：失败；输入下载失败',
       'task-two、task-three：失败；输入下载失败',
       '失败；项目打包失败',
@@ -1376,27 +1382,60 @@ test('真实项目组件消息集中：忙态、提交与查询错误、全部�
       'task-done：已完成',
     ])
     for (const hint of hints()) assert.doesNotMatch(hint, /keti3|source-project|timestamp-|historical-task|undefined/)
-    const savedHints = hints()
+    assert.deepEqual(rows().slice(0, acceptedRows.length), acceptedRows)
+    const th = nodes().filter(n => n.tag === 'th')
+    assert.deepEqual(th.map(text), ['taskID', 'projectID', 'IP 名字', '验证情况', '时间', '操作'])
+    assert.equal(th[4].props.title, 'UTC')
+    assert.deepEqual(nodes().filter(n => n.tag === 'td').map(text), ['table-task', 'table-project', 'table-ip', '已完成', '2026-10-14 00:00:00', '查看详情'])
+    const savedHints = hints(), savedRows = rows().slice()
+    await query(); await query()
+    assert.deepEqual(hints(), savedHints)
+    batches[0] = { ...batches[0], status: 'completed', error: undefined, tasks: [{ task_id: 'new-task' }] }
+    await query()
+    assert.deepEqual(rows().slice(0, savedRows.length), savedRows)
+    assert.equal(hints().at(-1), 'new-task：已完成')
+    assert.ok(hints().includes('task-one：失败；输入下载失败'))
+    await query()
+    assert.equal(hints().filter(t => t === 'new-task：已完成').length, 1)
+    batches[2].error = '新的失败原因'
+    await query()
+    assert.equal(hints().at(-1), '失败；新的失败原因')
+    batches[2].tasks = [{ task_id: 'later-task' }]
+    await query()
+    assert.equal(hints().at(-1), 'later-task：失败；新的失败原因')
+    assert.ok(hints().includes('失败；项目打包失败'))
+    assert.ok(hints().includes('失败；新的失败原因'))
+    const unchanged = hints()
+    await query()
+    assert.deepEqual(hints(), unchanged)
     nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
     await nextTick()
     assert.match(text(messages()), /请求中…/)
     assert.ok(descendants(messages()).some(n => n.props?.role === 'status' && n.text === '请求中…'))
-    assert.deepEqual(hints(), savedHints)
+    assert.deepEqual(hints().slice(0, savedHints.length), savedHints)
     failQuery = true
     nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
     await flushProject()
     assert.match(text(messages()), /请求中….*查询失败/s)
     rejectSubmit(new Error('提交失败'))
     await flushProject()
-    assert.doesNotMatch(text(messages()), /请求中…/)
-    assert.deepEqual(descendants(messages()).filter(n => n.props?.role === 'alert').map(text), ['提交失败', '查询失败'])
-    assert.deepEqual(hints(), savedHints)
+    assert.deepEqual(hints().slice(-3), ['请求中…', '查询失败', '提交失败'])
+    await query()
+    assert.equal(hints().filter(t => t === '查询失败').length, 2)
+    nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
+    await nextTick(); rejectSubmit(new Error('提交失败')); await flushProject()
+    assert.equal(hints().filter(t => t === '提交失败').length, 2)
+    const history = hints()
+    nodes().find(n => n.props?.['aria-label'] === '查询项目 ID').props['onUpdate:modelValue']('changed')
+    await nextTick()
+    active.value = false; await nextTick(); active.value = true; await nextTick()
+    assert.deepEqual(hints(), history)
+    assert.deepEqual(hints().slice(0, savedHints.length), savedHints)
     assert.equal(nodes().filter(n => n.props?.class === 'project-messages').length, 1)
     for (const node of nodes().filter(n => ['project-error', 'project-hint'].includes(n.props?.class) && n.tag === 'p')) {
       assert.ok(descendants(messages()).includes(node))
     }
-    const batchRows = descendants(messages()).filter(n => n.tag === 'p' && n.props?.role === 'status')
-    assert.deepEqual(batchRows.map(n => n.props.class), ['project-error', 'project-error', 'project-error', 'project-hint', 'project-hint'])
+    assert.ok(rows().some(n => n.props.role === 'alert' && text(n) === 'task-one：失败；输入下载失败'))
   } finally { app.unmount(); clock.restore(); globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot }
 })
 
@@ -1408,6 +1447,9 @@ test('消息区边框与独立滚动；对话间距紧凑且窄屏不放大，�
   assert.match(messageArea, /border:2px solid/)
   assert.match(messageArea, /max-height:min\(200px,30%\)/)
   assert.match(messageArea, /overflow:auto/)
+  assert.match(rules('.project-messages p + p')[0], /border-top:1px solid var\(--line\)/)
+  const header = rules('.task-table th')[0]
+  for (const rule of [/position:sticky/, /top:0/, /z-index:1/, /background:#fff/]) assert.match(header, rule)
   assert.match(rules('.project-output')[0], /overflow:hidden/)
   assert.match(rules('.task-table-scroll')[0], /overflow:auto; flex:1; min-height:0/)
   assert.match(rules('.project-output > :not(.task-table-scroll)')[0], /flex-shrink:0/)
