@@ -1,0 +1,1 @@
+len(SignFlag) >= JoinTotal && JoinTotal <= 5 and \forall 0 <= j < JoinTotal.SignFlag[j] < len(wa) && size(Rtemp) = (3, 5)

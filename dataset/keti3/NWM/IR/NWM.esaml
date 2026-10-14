@@ -1,0 +1,1036 @@
+system sunSearch
+  properties
+    F[3] wbi ;
+    F[3] deltG ;
+    I F_StopCtrl ;
+    I[9] FUsing_gyro ;
+    F[9] deltGm ;
+    I F_NoUseGroup ;
+    I FS_AttD ;
+    I[14] FP_ModeStopCtrl ;
+    Enum{SBM、EIM、NWM} WorkMode ;
+    F[3] Atti_ESG ;
+    F[3] dAtti_ESG ;
+    F[3] wbo_ESG ;
+    F[3][3] Cbo_ESG ;
+    F[3] w_ESG ;
+    F[3] woi ;
+    I[14] Seq_AttD ;
+    F[3] D0_ESCorr ;
+    F[3] De_ESCorr ;
+    F[2][3] Eb_i ;
+    F[3] Eb ;
+    F[2] phi_i ;
+    F[2] theta_i ;
+    I[2] FV_ES ;
+    I[2] FU_ES ;
+    F[2][3] Em ;
+    F Phi_ES ;
+    F theta_ES ;
+    F dPhi_ES ;
+    F dtheta_ES ;
+    F[14] Timer_Mode ;
+    I FS_AttD ;
+    I CycleNum ;
+    I[2] FS ;
+    I[2] FHV_ES ;
+    F[2] S_Emz ;
+    F[3] Rate_c ;
+    F[3] w_Clp ;
+    F[4] q_ESG ;
+    F[3][3] Cbo_Clp ;
+    F[3] Atti_Clp ;
+    F[3] dAtti_Clp ;
+    F[3] wbo_Clp ;
+    F[4] q_STG ;
+    F[3] Atti_C ;
+    F[3] w_STG ;
+    F[4] qbt ;
+    I[14] FS_ModeProc ;
+    F[3] Atti_AAM ;
+    F[3] dAtti_AAM ;
+    F[3] w_AAM ;
+    F[4] q_STDyn ;
+    F[3] w_STDyn ;
+    F Phi_ES ;
+    F[3] Atti_Ref ;
+    I FP_BMC ;
+    F[4] qri ;
+    F[3] wri ;
+    F[3][3] coi ;
+    I[14] FP_Qctrl ;
+    F[3] dAtti_Ref ;
+    F[3] Atti_STG ;
+    F[3] dAtti_STG ;
+    F[3] wbo_STG ;
+    F[3][3] Cbo_STG ;
+    F[3] Atti_STDyn ;
+    F[3] dAtti_STDyn ;
+    F[3] wbo_STDyn ;
+    F[3][3] Cbo_STDyn ;
+    F[12] t ;
+    F[3] a ;
+    F[3] a2 ;
+    F[3] SumTn2 ;
+    F[3] SumTp2 ;
+    F[12] t_AC ;
+    I[3] F_st ;
+    F[3][2] apn ;
+    F[3] ThrGr ;
+    F[3] mPhase_ThetaC_pst ;
+    I[3] mPhase_Region ;
+    I[3] F_Jet ;
+    F[3] mPhase_FJB ;
+    I[12] F_AssignUse ;
+    F[3] SumTn ;
+    F[3] SumTp ;
+    I m_SubMode ;
+    F[3] dAtti_C ;
+    I ID_Mass ;
+    I FU_thrGr ;
+    I[3] FJ ;
+    I[14] FP_RWorCMGC ;
+    I F_UldT ;
+    I F_EarthAcq ;
+    I F_YawCapt ;
+    I FP_GK_JetBack ;
+    I SMODE ;
+    F[3][3] Js_All ;
+    Enum{SBM、EIM、NWM} WorkMode_Lst ;
+    F StarTime ;
+    F[3] Atti_Trgt ;
+    F Tc ;
+    F t_next ;
+    I F_qJDerr ;
+    F[3][3] CPN ;
+    F[4] qJD ;
+    I FS_CPNCal ;
+    I F_TurnAAM ;
+    I FV ;
+    I[3] F_SunlightZone ;
+    I FV_NoInsert ;
+    结构体 OrbI ;
+    结构体 OrbG ;
+    结构体 Orb ;
+    结构体 OrbOut ;
+    I[14] FP_OrbUpdate ;
+    I F_DTOrbitEUpdate ;
+    I FP_UseOtherOrb ;
+    I FP_WoPrecession ;
+    I FS_UseType ;
+    F[3][3] Cro ;
+    F[3] ddAtti_Ref ;
+    F[3] TorqRef ;
+    F[3] A_Ref_si ;
+    F[3][3] Cro_si ;
+    F[3] wri_si ;
+    F psi_DA ;
+    F dpsi_DA ;
+    F tx_thrGr ;
+    F ty_thrGr ;
+    F tz_thrGr ;
+    F[12] t_thr ;
+    F[3] wro ;
+end
+system implementation sunSearch . SunSearchCtrlImplI
+  init
+    WorkMode = SBM; 
+    Seq_AttD = {123,123,123}; 
+    Timer_Mode = nan; 
+    WorkMode_Lst = SBM; 
+    Tc = 0.128; 
+    qJD = {0,0,0,1}; 
+    OrbI = 见备注1; 
+    OrbG = 见备注1; 
+    Orb = 见备注1; 
+    OrbOut = 见备注2; 
+    FP_WoPrecession = nan; 
+    FS_UseType = nan; 
+    wri_si = nan; 
+    wro = nan; 
+  channels
+    channel1[GyroFetchData] :
+        data port Controller . GyroFetchData -> gyro1 . GyroFetchData ;
+    channel2[GyroPowerState] :
+        data port gyro1 . GyroPowerState -> Controller . GyroPowerState ;
+    channel3[deltGm] :
+        data port gyro1 . deltGm -> Controller . deltGm ;
+    channel4[EssFetchData] :
+        data port Controller . EssFetchData -> ess1 . EssFetchData ;
+    channel5[Emx] :
+        data port ess1 . Emx -> Controller . Emx ;
+    channel6[Emy] :
+        data port ess1 . Emy -> Controller . Emy ;
+    channel7[t_thr] :
+        data port Controller . t_thr -> jet1 . t_thr ;
+    channel8[/] :
+        data port Controller . / -> obdh1 . / ;
+    channel9[/] :
+        data port obdh1 . / -> Controller . / ;
+  components
+    subsystem Controller . Controller_I Controller;
+    subsystem Gyro3F . Gyro3F_I gyro1;
+    subsystem ESS . ESS_I ess1;
+    subsystem JET . JET_I jet1;
+    subsystem ExtComputer . ExtComputer_I obdh1;
+end
+subsystem Gyro3F
+  features
+    input data port GyroFetchData;
+    output data port GyroPowerState;
+    output data port deltGm;
+end
+subsystem implementation Gyro3F . Gyro3F_I
+end
+subsystem ESS
+  features
+    input data port EssFetchData;
+    output data port Emx;
+    output data port Emy;
+end
+subsystem implementation ESS . ESS_I
+end
+subsystem JET
+  features
+    input data port t_thr;
+end
+subsystem implementation JET . JET_I
+end
+subsystem ExtComputer
+  features
+    input data port /;
+    output data port /;
+end
+subsystem implementation ExtComputer . ExtComputer_I
+end
+subsystem Controller  /*控制器*/
+  features
+    input data port OrbI.t0;
+    input data port StarTime;
+    input data port Tc;
+    input data port FUsing_gyro;
+    input data port deltGm;
+    input data port F_NoUseGroup;
+    input data port FS_AttD;
+    input data port FP_ModeStopCtrl;
+    input data port WorkMode;
+    input data port Atti_ESG;
+    input data port deltG;
+    input data port woi;
+    input data port Seq_AttD;
+    input data port D0_ESCorr;
+    input data port De_ESCorr;
+    input data port WorkMode;
+    input data port WorkMode;
+    input data port Timer_Mode;
+    input data port FS_AttD;
+    input data port CycleNum;
+    input data port FS;
+    input data port FHV_ES;
+    input data port S_Emz;
+    input data port FV_ES;
+    input data port FU_ES;
+    input data port Em;
+    input data port dtheta_ES;
+    input data port Phi_ES;
+    input data port theta_ES;
+    input data port dPhi_ES;
+    input data port Atti_ESG;
+    input data port D0_ESCorr;
+    input data port De_ESCorr;
+    input data port WorkMode;
+    input data port FS_ModeProc;
+    input data port Atti_AAM;
+    input data port dAtti_AAM;
+    input data port w_AAM;
+    input data port FS_AttD;
+    input data port q_STDyn;
+    input data port w_STDyn;
+    input data port Phi_ES;
+    input data port theta_ES;
+    input data port Atti_Ref;
+    input data port Seq_AttD;
+    input data port dAtti_ESG;
+    input data port wbo_ESG;
+    input data port woi;
+    input data port FP_BMC;
+    input data port qri;
+    input data port wri;
+    input data port coi;
+    input data port w_ESG;
+    input data port FP_Qctrl;
+    input data port dAtti_Ref;
+    input data port Atti_STG;
+    input data port dAtti_STG;
+    input data port wbo_STG;
+    input data port Cbo_STG;
+    input data port Atti_STDyn;
+    input data port dAtti_STDyn;
+    input data port wbo_STDyn;
+    input data port Cbo_STDyn;
+    input data port dPhi_ES;
+    input data port dtheta_ES;
+    input data port Atti_Clp;
+    input data port dAtti_Clp;
+    input data port wbo_Clp;
+    input data port q_STG;
+    input data port Atti_C;
+    input data port w_STG;
+    input data port Atti_ESG;
+    input data port Cbo_ESG;
+    input data port qbt;
+    input data port F_StopCtrl;
+    input data port WorkMode;
+    input data port Timer_Mode;
+    input data port m_SubMode;
+    input data port Atti_C;
+    input data port dAtti_C;
+    input data port ID_Mass;
+    input data port FU_thrGr;
+    input data port FJ;
+    input data port FP_RWorCMGC;
+    input data port F_UldT;
+    input data port F_EarthAcq;
+    input data port F_YawCapt;
+    input data port FP_GK_JetBack;
+    input data port SMODE;
+    input data port Js_All;
+    input data port ThrGr;
+    input data port mPhase_ThetaC_pst;
+    input data port mPhase_Region;
+    input data port F_Jet;
+    input data port mPhase_FJB;
+    input data port F_AssignUse;
+    input data port SumTn;
+    input data port SumTp;
+    input data port CycleNum;
+    input data port Timer_Mode;
+    input data port Tc;
+    input data port WorkMode_Lst;
+    input data port StarTime;
+    input data port Timer_Mode;
+    input data port WorkMode;
+    input data port StarTime;
+    input data port Tc;
+    input data port t_next;
+    input data port FS_CPNCal;
+    input data port qJD;
+    input data port WorkMode;
+    input data port t_next;
+    input data port FP_OrbUpdate;
+    input data port F_DTOrbitEUpdate;
+    input data port FP_UseOtherOrb;
+    input data port FP_WoPrecession;
+    input data port OrbG;
+    input data port OrbI;
+    input data port FS_UseType;
+    input data port WorkMode;
+    input data port Atti_Trgt;
+    input data port Seq_AttD;
+    input data port OrbOut.Coi;
+    input data port woi;
+    input data port Cro;
+    input data port wri;
+    input data port wro;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    input data port psi_DA;
+    input data port dpsi_DA;
+    input data port OrbOut.Coi;
+    input data port woi;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    input data port Cro;
+    input data port wri;
+    input data port wro;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    output data port StarTime;
+    output data port StarTime;
+    output data port tx_thrGr;
+    output data port ty_thrGr;
+    output data port tz_thrGr;
+    output data port t_thr;
+    output data port deltG;
+    output data port wbi;
+    output data port F_StopCtrl;
+    output data port Atti_ESG;
+    output data port dAtti_ESG;
+    output data port wbo_ESG;
+    output data port Cbo_ESG;
+    output data port w_ESG;
+    output data port Eb_i;
+    output data port Eb;
+    output data port phi_i;
+    output data port theta_i;
+    output data port FV_ES;
+    output data port FU_ES;
+    output data port Em;
+    output data port Phi_ES;
+    output data port theta_ES;
+    output data port dPhi_ES;
+    output data port dtheta_ES;
+    output data port Atti_ESG;
+    output data port D0_ESCorr;
+    output data port De_ESCorr;
+    output data port Rate_c;
+    output data port w_Clp;
+    output data port q_ESG;
+    output data port Cbo_Clp;
+    output data port Atti_Clp;
+    output data port dAtti_Clp;
+    output data port wbo_Clp;
+    output data port q_STG;
+    output data port Atti_C;
+    output data port w_STG;
+    output data port Atti_ESG;
+    output data port Cbo_ESG;
+    output data port qbt;
+    output data port t;
+    output data port a;
+    output data port a2;
+    output data port SumTn2;
+    output data port SumTp2;
+    output data port t_AC;
+    output data port F_st;
+    output data port apn;
+    output data port ThrGr;
+    output data port mPhase_ThetaC_pst;
+    output data port mPhase_Region;
+    output data port F_Jet;
+    output data port mPhase_FJB;
+    output data port F_AssignUse;
+    output data port SumTn;
+    output data port SumTp;
+    output data port CycleNum;
+    output data port Timer_Mode[WorkMode_Lst];
+    output data port WorkMode;
+    output data port WorkMode_Lst;
+    output data port Timer_Mode[WorkMode_Lst];
+    output data port Atti_Trgt;
+    output data port t_next;
+    output data port F_qJDerr;
+    output data port CPN;
+    output data port qJD;
+    output data port F_TurnAAM;
+    output data port FV;
+    output data port F_SunlightZone;
+    output data port FV_NoInsert;
+    output data port OrbOut;
+    output data port Cro;
+    output data port wri;
+    output data port wro;
+    output data port qri;
+    output data port Atti_Ref;
+    output data port dAtti_Ref;
+    output data port ddAtti_Ref;
+    output data port TorqRef;
+    output data port wro;
+    output data port A_Ref_si;
+    output data port Cro;
+    output data port Cro_si;
+    output data port wri;
+    output data port wri_si;
+    output data port qri;
+    output data port Atti_Ref;
+    output data port dAtti_Ref;
+    output data port ddAtti_Ref;
+    output data port TorqRef;
+end
+subsystem Controller implementation Controller_I  /*控制器*/
+  components
+    initact activity Set1 . Set1_I Set1;
+     activity Set2 . Set2_I Set2;
+     activity Set3 . Set3_I Set3;
+     activity Set4 . Set4_I Set4;
+     activity Set5 . Set5_I Set5;
+     activity Set6 . Set6_I Set6;
+     activity DetAtt1 . DetAtt1_I DetAtt1;
+     activity DetAtt2 . DetAtt2_I DetAtt2;
+     activity DetAtt3 . DetAtt3_I DetAtt3;
+     activity CalCtrl1 . CalCtrl1_I CalCtrl1;
+     activity CalCtrl2 . CalCtrl2_I CalCtrl2;
+     activity Set7 . Set7_I Set7;
+     activity Set8 . Set8_I Set8;
+     activity SwitchMode1 . SwitchMode1_I SwitchMode1;
+     activity Set9 . Set9_I Set9;
+     activity Set10 . Set10_I Set10;
+     activity Set11 . Set11_I Set11;
+     activity Set12 . Set12_I Set12;
+     activity CalEnv1 . CalEnv1_I CalEnv1;
+     activity CalEnv2 . CalEnv2_I CalEnv2;
+     activity CalTar1 . CalTar1_I CalTar1;
+     activity CalTar2 . CalTar2_I CalTar2;
+     activity CalTar3 . CalTar3_I CalTar3;
+     activity CalTar4 . CalTar4_I CalTar4;
+  processes
+    channel1[StarTime] :
+        data port Set1 . StarTime -> Set2 . StarTime ;
+    channel2[StarTime] :
+        data port Set2 . StarTime -> SwitchMode1 . StarTime ;
+    channel3[StarTime] :
+        data port Set2 . StarTime -> Set12 . StarTime ;
+    channel4[deltG] :
+        data port DetAtt1 . deltG -> DetAtt2 . deltG ;
+    channel5[F_StopCtrl] :
+        data port DetAtt1 . F_StopCtrl -> CalCtrl2 . F_StopCtrl ;
+    channel6[Atti_ESG] :
+        data port DetAtt2 . Atti_ESG -> DetAtt3 . Atti_ESG ;
+    channel7[Cbo_ESG] :
+        data port DetAtt2 . Cbo_ESG -> CalCtrl1 . Cbo_ESG ;
+    channel8[Atti_ESG] :
+        data port DetAtt3 . Atti_ESG -> CalCtrl1 . Atti_ESG ;
+    channel9[Atti_C] :
+        data port CalCtrl1 . Atti_C -> CalCtrl2 . Atti_C ;
+    channel10[CycleNum] :
+        data port Set7 . CycleNum -> DetAtt3 . CycleNum ;
+    channel11[WorkMode] :
+        data port SwitchMode1 . WorkMode -> Set9 . WorkMode ;
+    channel12[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalTar1 . WorkMode ;
+    channel13[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalTar3 . WorkMode ;
+    channel14[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalCtrl1 . WorkMode ;
+    channel15[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalCtrl2 . WorkMode ;
+    channel16[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalEnv2 . WorkMode ;
+    channel17[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalTar2 . WorkMode ;
+    channel18[WorkMode] :
+        data port SwitchMode1 . WorkMode -> CalTar4 . WorkMode ;
+    channel19[t_next] :
+        data port Set12 . t_next -> CalEnv1 . t_next ;
+    channel20[t_next] :
+        data port Set12 . t_next -> CalEnv2 . t_next ;
+    channel21[qri] :
+        data port CalTar1 . qri -> CalTar3 . qri ;
+    channel22[TorqRef] :
+        data port CalTar2 . TorqRef -> CalTar4 . TorqRef ;
+    channel23[wro] :
+        data port CalTar3 . wro -> CalTar4 . wro ;
+    channel24[wro] :
+        data port CalTar3 . wro -> CalTar2 . wro ;
+  schedule
+    Set1>Set2;
+    Set2>Set3;
+    Set3>Set4;
+    Set4>Set5;
+    Set5>Set6;
+    Set6>DetAtt1;
+    Set6>Set7;
+    DetAtt1>DetAtt2;
+    DetAtt2>DetAtt3;
+    DetAtt3>CalCtrl1;
+    CalCtrl1>CalCtrl2;
+    CalCtrl2>Set7;
+    Set7>Set8;
+    Set8>SwitchMode1;
+    SwitchMode1>Set9;
+    SwitchMode1>Set12;
+    SwitchMode1>CalEnv1;
+    SwitchMode1>CalTar1;
+    SwitchMode1>CalTar3;
+    Set9>Set10;
+    Set10>Set11;
+    Set11>Set12;
+    Set11>CalEnv1;
+    Set11>CalTar1;
+    Set11>CalTar3;
+    Set12>CalEnv1;
+    Set12>CalTar1;
+    Set12>CalTar3;
+    CalEnv1>CalEnv2;
+    CalEnv2>CalTar1;
+    CalEnv2>CalTar3;
+    CalTar1>CalTar2;
+    CalTar2>CalTar3;
+    CalTar3>CalTar4;
+    Set6>split_1;
+    split_1>DetAtt1;
+    split_1>Set7;
+    Set6>join_1;
+    CalCtrl2>join_1;
+    join_1>Set7;
+    SwitchMode1>split_2;
+    split_2>Set9;
+    split_2>Set12;
+    split_2>CalEnv1;
+    split_2>CalTar1;
+    split_2>CalTar3;
+    Set11>split_3;
+    split_3>Set12;
+    split_3>CalEnv1;
+    split_3>CalTar1;
+    split_3>CalTar3;
+    Set12>split_4;
+    split_4>CalEnv1;
+    split_4>CalTar1;
+    split_4>CalTar3;
+    SwitchMode1>join_2;
+    Set11>join_2;
+    join_2>Set12;
+    SwitchMode1>join_3;
+    Set11>join_3;
+    Set12>join_3;
+    join_3>CalEnv1;
+    CalEnv2>split_5;
+    split_5>CalTar1;
+    split_5>CalTar3;
+    SwitchMode1>join_4;
+    Set11>join_4;
+    Set12>join_4;
+    CalEnv2>join_4;
+    join_4>CalTar1;
+    SwitchMode1>join_5;
+    Set11>join_5;
+    Set12>join_5;
+    CalEnv2>join_5;
+    CalTar2>join_5;
+    join_5>CalTar3;
+end
+activity Set1
+  features
+    input data port OrbI.t0;
+    output data port StarTime;
+end
+activity implementation Set1 . Set1_I
+end
+activity Set2
+  features
+    input data port StarTime;
+    input data port Tc;
+    output data port StarTime;
+end
+activity implementation Set2 . Set2_I
+end
+activity Set3
+  features
+    output data port tx_thrGr;
+end
+activity implementation Set3 . Set3_I
+  operations
+    "设置三轴喷气脉宽为零"
+end
+activity Set4
+  features
+    output data port ty_thrGr;
+end
+activity implementation Set4 . Set4_I
+  operations
+    "设置三轴喷气脉宽为零"
+end
+activity Set5
+  features
+    output data port tz_thrGr;
+end
+activity implementation Set5 . Set5_I
+  operations
+    "设置三轴喷气脉宽为零"
+end
+activity Set6
+  features
+    output data port t_thr;
+end
+activity implementation Set6 . Set6_I
+  operations
+    "设置12个喷管喷气脉宽为0"
+end
+activity DetAtt1
+  features
+    input data port FUsing_gyro;
+    input data port deltGm;
+    input data port F_NoUseGroup;
+    input data port FS_AttD;
+    input data port FP_ModeStopCtrl;
+    input data port WorkMode;
+    output data port deltG;
+    output data port wbi;
+    output data port F_StopCtrl;
+end
+activity implementation DetAtt1 . DetAtt1_I
+  operations
+    "陀螺姿态确定：根据公式表B1条目,通过陀螺数据计算得到三轴陀螺惯性角速度和速度增量"
+end
+activity DetAtt2
+  features
+    input data port Atti_ESG;
+    input data port deltG;
+    input data port woi;
+    input data port Seq_AttD;
+    input data port D0_ESCorr;
+    input data port De_ESCorr;
+    input data port WorkMode;
+    output data port Atti_ESG;
+    output data port dAtti_ESG;
+    output data port wbo_ESG;
+    output data port Cbo_ESG;
+    output data port w_ESG;
+end
+activity implementation DetAtt2 . DetAtt2_I
+  operations
+    "陀螺预估对地姿态：根据公式表B2条目,根据陀螺输入，预估卫星对地姿态"
+end
+activity DetAtt3
+  features
+    input data port WorkMode;
+    input data port Timer_Mode;
+    input data port FS_AttD;
+    input data port CycleNum;
+    input data port FS;
+    input data port FHV_ES;
+    input data port S_Emz;
+    input data port FV_ES;
+    input data port FU_ES;
+    input data port Em;
+    input data port dtheta_ES;
+    input data port Phi_ES;
+    input data port theta_ES;
+    input data port dPhi_ES;
+    input data port Atti_ESG;
+    input data port D0_ESCorr;
+    input data port De_ESCorr;
+    output data port Eb_i;
+    output data port Eb;
+    output data port phi_i;
+    output data port theta_i;
+    output data port FV_ES;
+    output data port FU_ES;
+    output data port Em;
+    output data port Phi_ES;
+    output data port theta_ES;
+    output data port dPhi_ES;
+    output data port dtheta_ES;
+    output data port Atti_ESG;
+    output data port D0_ESCorr;
+    output data port De_ESCorr;
+end
+activity implementation DetAtt3 . DetAtt3_I
+  operations
+    "红外姿态确定：根据公式表B3条目,利用红外数据进行有效性判断及处理和姿态修正"
+end
+activity CalCtrl1
+  features
+    input data port WorkMode;
+    input data port FS_ModeProc;
+    input data port Atti_AAM;
+    input data port dAtti_AAM;
+    input data port w_AAM;
+    input data port FS_AttD;
+    input data port q_STDyn;
+    input data port w_STDyn;
+    input data port Phi_ES;
+    input data port theta_ES;
+    input data port Atti_Ref;
+    input data port Seq_AttD;
+    input data port dAtti_ESG;
+    input data port wbo_ESG;
+    input data port woi;
+    input data port FP_BMC;
+    input data port qri;
+    input data port wri;
+    input data port coi;
+    input data port w_ESG;
+    input data port FP_Qctrl;
+    input data port dAtti_Ref;
+    input data port Atti_STG;
+    input data port dAtti_STG;
+    input data port wbo_STG;
+    input data port Cbo_STG;
+    input data port Atti_STDyn;
+    input data port dAtti_STDyn;
+    input data port wbo_STDyn;
+    input data port Cbo_STDyn;
+    input data port dPhi_ES;
+    input data port dtheta_ES;
+    input data port Atti_Clp;
+    input data port dAtti_Clp;
+    input data port wbo_Clp;
+    input data port q_STG;
+    input data port Atti_C;
+    input data port w_STG;
+    input data port Atti_ESG;
+    input data port Cbo_ESG;
+    input data port qbt;
+    output data port Rate_c;
+    output data port w_Clp;
+    output data port q_ESG;
+    output data port Cbo_Clp;
+    output data port Atti_Clp;
+    output data port dAtti_Clp;
+    output data port wbo_Clp;
+    output data port q_STG;
+    output data port Atti_C;
+    output data port w_STG;
+    output data port Atti_ESG;
+    output data port Cbo_ESG;
+    output data port qbt;
+end
+activity implementation CalCtrl1 . CalCtrl1_I
+  operations
+    "姿态控制量计算：根据公式表B4条目进行计算,计算给控制器的姿态和角速度误差"
+end
+activity CalCtrl2
+  features
+    input data port F_StopCtrl;
+    input data port WorkMode;
+    input data port Timer_Mode;
+    input data port m_SubMode;
+    input data port Atti_C;
+    input data port dAtti_C;
+    input data port ID_Mass;
+    input data port FU_thrGr;
+    input data port FJ;
+    input data port FP_RWorCMGC;
+    input data port F_UldT;
+    input data port F_EarthAcq;
+    input data port F_YawCapt;
+    input data port FP_GK_JetBack;
+    input data port SMODE;
+    input data port Js_All;
+    input data port ThrGr;
+    input data port mPhase_ThetaC_pst;
+    input data port mPhase_Region;
+    input data port F_Jet;
+    input data port mPhase_FJB;
+    input data port F_AssignUse;
+    input data port SumTn;
+    input data port SumTp;
+    output data port t;
+    output data port a;
+    output data port a2;
+    output data port SumTn2;
+    output data port SumTp2;
+    output data port t_AC;
+    output data port F_st;
+    output data port apn;
+    output data port ThrGr;
+    output data port mPhase_ThetaC_pst;
+    output data port mPhase_Region;
+    output data port F_Jet;
+    output data port mPhase_FJB;
+    output data port F_AssignUse;
+    output data port SumTn;
+    output data port SumTp;
+end
+activity implementation CalCtrl2 . CalCtrl2_I
+  operations
+    "姿态喷气控制：根据公式表B5条目进行计算,进行姿控的推力器脉宽分配计算"
+end
+activity Set7
+  features
+    input data port CycleNum;
+    output data port CycleNum;
+end
+activity implementation Set7 . Set7_I
+end
+activity Set8
+  features
+    input data port Timer_Mode;
+    input data port Tc;
+    output data port Timer_Mode[WorkMode_Lst];
+end
+activity implementation Set8 . Set8_I
+end
+activity SwitchMode1
+  features
+    input data port WorkMode_Lst;
+    input data port StarTime;
+    input data port Timer_Mode;
+    output data port WorkMode;
+end
+activity implementation SwitchMode1 . SwitchMode1_I
+  operations
+    "模式切换 ：根据公式表B10条目,进行模式切换条件的判断和处理"
+end
+activity Set9
+  features
+    input data port WorkMode;
+    output data port WorkMode_Lst;
+end
+activity implementation Set9 . Set9_I
+  operations
+    "模式初始化"
+end
+activity Set10
+  features
+    output data port Timer_Mode[WorkMode_Lst];
+end
+activity implementation Set10 . Set10_I
+  operations
+    "设置模式计时为0.0,0.0,0.0"
+end
+activity Set11
+  features
+    output data port Atti_Trgt;
+end
+activity implementation Set11 . Set11_I
+  operations
+    "设置三轴目标姿态角{0.0,0.0,0.0}"
+end
+activity Set12
+  features
+    input data port StarTime;
+    input data port Tc;
+    output data port t_next;
+end
+activity implementation Set12 . Set12_I
+end
+activity CalEnv1
+  features
+    input data port t_next;
+    input data port FS_CPNCal;
+    input data port qJD;
+    output data port F_qJDerr;
+    output data port CPN;
+    output data port qJD;
+end
+activity implementation CalEnv1 . CalEnv1_I
+  operations
+    "岁差章动计算：根据公式表B6条目进行计算,计算岁差章动矩阵"
+end
+activity CalEnv2
+  features
+    input data port WorkMode;
+    input data port t_next;
+    input data port FP_OrbUpdate;
+    input data port F_DTOrbitEUpdate;
+    input data port FP_UseOtherOrb;
+    input data port FP_WoPrecession;
+    input data port OrbG;
+    input data port OrbI;
+    input data port FS_UseType;
+    output data port F_TurnAAM;
+    output data port FV;
+    output data port F_SunlightZone;
+    output data port FV_NoInsert;
+    output data port OrbOut;
+end
+activity implementation CalEnv2 . CalEnv2_I
+  operations
+    "卫星轨道外推计算：根据公式表B7条目进行计算,实时计算卫星轨道参数"
+end
+activity CalTar1
+  features
+    input data port WorkMode;
+    input data port Atti_Trgt;
+    input data port Seq_AttD;
+    input data port OrbOut.Coi;
+    input data port woi;
+    output data port Cro;
+    output data port wri;
+    output data port wro;
+    output data port qri;
+end
+activity implementation CalTar1 . CalTar1_I
+  operations
+    "消初偏目标姿态计算：根据公式表B8条目进行计算,在入轨消初偏模式中计算目标姿态"
+end
+activity CalTar2
+  features
+    input data port Cro;
+    input data port wri;
+    input data port wro;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    output data port Atti_Ref;
+    output data port dAtti_Ref;
+    output data port ddAtti_Ref;
+    output data port TorqRef;
+end
+activity implementation CalTar2 . CalTar2_I
+end
+activity CalTar3
+  features
+    input data port psi_DA;
+    input data port dpsi_DA;
+    input data port OrbOut.Coi;
+    input data port woi;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    output data port wro;
+    output data port A_Ref_si;
+    output data port Cro;
+    output data port Cro_si;
+    output data port wri;
+    output data port wri_si;
+    output data port qri;
+end
+activity implementation CalTar3 . CalTar3_I
+end
+activity CalTar4
+  features
+    input data port Cro;
+    input data port wri;
+    input data port wro;
+    input data port Seq_AttD;
+    input data port WorkMode;
+    output data port Atti_Ref;
+    output data port dAtti_Ref;
+    output data port ddAtti_Ref;
+    output data port TorqRef;
+end
+activity implementation CalTar4 . CalTar4_I
+end
+xorsplit activity split_1:
+end
+activity implementation split_1_I:
+  properties
+    DetAtt1.cond = WorkMode_Lst!=SBM;
+    Set7.cond = WorkMode_Lst==SBM;
+end
+xorsplit activity split_2:
+end
+activity implementation split_2_I:
+  properties
+    Set9.cond = WorkMode_Lst!=WorkMode;
+    Set12.cond = WorkMode_Lst==WorkMode&&F_DTOrbitEUpdate==1;
+    CalEnv1.cond = WorkMode_Lst==WorkMode&&F_DTOrbitEUpdate!=1&&WorkMode_Lst!=SBM;
+    CalTar1.cond = WorkMode_Lst==WorkMode&&F_DTOrbitEUpdate!=1&&WorkMode_Lst==SBM&&WorkMode_Lst==EIM;
+    CalTar3.cond = WorkMode_Lst==WorkMode&&F_DTOrbitEUpdate!=1&&WorkMode_Lst==SBM&&WorkMode_Lst!=EIM&&WorkMode_Lst==NWM;
+end
+xorsplit activity split_3:
+end
+activity implementation split_3_I:
+  properties
+    Set12.cond = F_DTOrbitEUpdate==1;
+    CalEnv1.cond = F_DTOrbitEUpdate!=1&&WorkMode_Lst!=SBM;
+    CalTar1.cond = F_DTOrbitEUpdate!=1&&WorkMode_Lst==SBM&&WorkMode_Lst==EIM;
+    CalTar3.cond = F_DTOrbitEUpdate!=1&&WorkMode_Lst==SBM&&WorkMode_Lst!=EIM&&WorkMode_Lst==NWM;
+end
+xorsplit activity split_4:
+end
+activity implementation split_4_I:
+  properties
+    CalEnv1.cond = WorkMode_Lst!=SBM;
+    CalTar1.cond = WorkMode_Lst==SBM&&WorkMode_Lst==EIM;
+    CalTar3.cond = WorkMode_Lst==SBM&&WorkMode_Lst!=EIM&&WorkMode_Lst==NWM;
+end
+xorsplit activity split_5:
+end
+activity implementation split_5_I:
+  properties
+    CalTar1.cond = WorkMode_Lst==EIM;
+    CalTar3.cond = WorkMode_Lst!=EIM&&WorkMode_Lst==NWM;
+end
+xorjoin activity join_1:
+end
+activity implementation join_1_I:
+end
+xorjoin activity join_2:
+end
+activity implementation join_2_I:
+end
+xorjoin activity join_3:
+end
+activity implementation join_3_I:
+end
+xorjoin activity join_4:
+end
+activity implementation join_4_I:
+end
+xorjoin activity join_5:
+end
+activity implementation join_5_I:
+end

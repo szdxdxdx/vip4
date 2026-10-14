@@ -1,0 +1,39 @@
+{
+  "DetAtt {deltG,wbi,F_StopCtrl} {FUsing_gyro,deltGm,F_NoUseGroup,FS_AttD,FP_ModeStopCtrl,WorkMode}ReqCapByTable FormulaTable.B1;": [
+    "CS_GyroData_Disposal"
+  ],
+  "DetAtt {Atti_ESG,dAtti_ESG,wbo_ESG,Cbo_ESG,w_ESG} {Atti_ESG, deltG,woi,Seq_AttD,D0_ESCorr,De_ESCorr,WorkMode}ReqCapByTable FormulaTable.B2;": [
+    "CS_Gyro_Att_Predict"
+  ],
+  "DetAtt {Eb_i,Eb,phi_i,theta_i,FV_ES,FU_ES,Em,Phi_ES,theta_ES,dPhi_ES,dtheta_ES,Atti_ESG,D0_ESCorr,De_ESCorr}{WorkMode,Timer_Mode,FS_AttD,CycleNum,FS,FHV_ES,S_Emz,FV_ES,FU_ES,Em,dtheta_ES,Phi_ES,theta_ES,dPhi_ES,Atti_ESG,D0_ESCorr,De_ESCorr}ReqCapByTable FormulaTable.B3;": [
+    "CS_IRES_Attitude"
+  ],
+  "CalCtrl {Rate_c,w_Clp,q_ESG,Cbo_Clp,Atti_Clp,dAtti_Clp,wbo_Clp,q_STG,Atti_C,w_STG,Atti_ESG,Cbo_ESG,qbt}{WorkMode,FS_ModeProc,Atti_AAM,dAtti_AAM,w_AAM,FS_AttD,q_STDyn,w_STDyn,Phi_ES,theta_ES,Atti_Ref,Seq_AttD,dAtti_ESG,wbo_ESG,woi,FP_BMC,qri,wri,coi,w_ESG,FP_Qctrl,dAtti_Ref,Atti_STG,dAtti_STG,wbo_STG,Cbo_STG,Atti_STDyn,dAtti_STDyn,wbo_STDyn,Cbo_STDyn,dPhi_ES,dtheta_ES,Atti_Clp ,dAtti_Clp,wbo_Clp,q_STG,Atti_C,w_STG,Atti_ESG,Cbo_ESG,qbt}ReqCapByTable FormulaTable.B4;": [
+    "CS_Ctrl_Att_Rate"
+  ],
+  "CalCtrl{t,a,a2,SumTn2,SumTp2,t_AC,F_st,apn,ThrGr,mPhase_ThetaC_pst,mPhase_Region,F_Jet,mPhase_FJB,F_AssignUse,SumTn,SumTp}{F_StopCtrl,WorkMode,Timer_Mode,m_SubMode,Atti_C,dAtti_C,ID_Mass,FU_thrGr,FJ,FP_RWorCMGC,F_UldT,F_EarthAcq,F_YawCapt,FP_GK_JetBack,SMODE,Js_All,ThrGr,mPhase_ThetaC_pst,mPhase_Region,F_Jet,mPhase_FJB,F_AssignUse,SumTn,SumTp}ReqCapByTable FormulaTable.B5;": [
+    "CS_AttCtrl_Propel"
+  ],
+  "SwitchMode {WorkMode} {WorkMode_Lst,StarTime,Timer_Mode}ReqCapByTable FormulaTable.B10;": [
+    "ModeConvert_EIM",
+    "ModeConvert_SBM"
+  ],
+  "CalEnv {F_qJDerr,CPN,qJD} {t_next,FS_CPNCal,qJD}ReqCapByTable FormulaTable.B6;": [
+    "CS_PrecessionNutationCal"
+  ],
+  "CalEnv{F_TurnAAM,FV,F_SunlightZone,FV_NoInsert,OrbOut}{WorkMode,t_next,FP_OrbUpdate,F_DTOrbitEUpdate,FP_UseOtherOrb,FP_WoPrecession,OrbG,OrbI,FS_UseType}ReqCapByTable FormulaTable.B7;": [
+    "CS_OrbitComputation"
+  ],
+  "CalTar {Cro,wri,wro,qri} {WorkMode,Atti_Trgt,Seq_AttD,OrbOut.Coi,woi}ReqCapByTable FormulaTable.B8;": [
+    "CS_TrgtAtt_EIM"
+  ],
+  "CalTar {Atti_Ref,dAtti_Ref,ddAtti_Ref,TorqRef} {Cro,wri,wro,Seq_AttD,WorkMode}ReqCapByTable FormulaTable.B11;": [
+    "CS_Track_Atti"
+  ],
+  "CalTar {wro,A_Ref_si,Cro,Cro_si,wri,wri_si,qri} {psi_DA,dpsi_DA,OrbOut.Coi,woi,Seq_AttD,WorkMode}ReqCapByTable FormulaTable.B9;": [
+    "CS_TrgtAtt_NWM_USU"
+  ],
+  "CalTar {Atti_Ref,dAtti_Ref,ddAtti_Ref,TorqRef} { Cro, wri,wro,Seq_AttD, WorkMode}ReqCapByTable FormulaTable.B11;": [
+    "CS_Track_Atti"
+  ]
+}

@@ -1,0 +1,53 @@
+\begin{document}
+
+\title{Assume/Guarantee Contract of \texttt{CalculateGyroDg}}
+
+\maketitle
+
+\section{Variable Declaration}
+
+\begin{description}
+\item[Maps]: \var{variables} in Code $\mapsto$ \Var{variables} in Formal Specification
+
+\item[Alphabet]: \Var{JoinTotal}, \Var{SignFlag}, \Var{wa}, \Var{Rtemp}, $\Var{W}'$, \clock, $\clock'$
+
+\item[Inputs]:
+\begin{itemize}
+\item $\var{JoinTotal}\mapsto\Var{JoinTotal}:\mathbb{N}$
+\item $\var{SignFlag}\mapsto\Var{SignFlag}:\mathbb{N}\rightharpoonup\mathbb{N}$
+\item $\var{wa}\mapsto\Var{wa}:\mathbb{N}\rightharpoonup\mathbb{R}$
+\item $\var{Rtemp}\mapsto\Var{Rtemp}:(\mathbb{N},\mathbb{N})\rightharpoonup\mathbb{R}$
+\end{itemize}
+
+\item[Outputs]:
+\begin{itemize}
+\item $\var{W}\mapsto\Var{W}:\mathbb{N}\rightharpoonup\mathbb{R}$
+\end{itemize}
+
+\item[In-Outputs]: None
+
+\item[States]: None
+
+\item[Parameters]:None
+
+\item[Clocks]: $\clock,\clock':\mathbb{R}_{\geq0}$
+
+\end{description}
+
+\section{AG Contract}
+
+\begin{description}
+\item[Assumptions]:\\
+$\syntax{len}(\Var{SignFlag})\geq\Var{JoinTotal}\wedge\Var{JoinTotal}\leq5\wedge\forall0\leq j<\Var{JoinTotal}\cdot\Var{SignFlag}[j]<\syntax{len}(\Var{wa})$\\
+$\wedge\syntax{size}(\Var{Rtemp})=(3,5)$
+\item[Guarantees]:\\
+$\syntax{len}(\Var{W}')=3\wedge\exists\Var{tmpwa}:\mathbb{N}\rightharpoonup\mathbb{R}\cdot\syntax{len}(\Var{tmpwa})=5$\\
+$\wedge\forall0\leq j<\Var{JoinTotal}\cdot\Var{tmpwa}[j]=\Var{wa}[\Var{SignFlag}[j]]\wedge\forall j\geq\Var{JoinTotal}\cdot\Var{tmpwa}[j]=0$\\
+$\wedge\syntax{if }\Var{JoinTotal}\geq3\syntax{ then }\Var{W}'=\Var{Rtemp}\bullet\Var{tmpwa}\syntax{ else }\forall0\leq i<3\cdot\Var{W}'[i]=0\syntax{ endif}$\\
+$\wedge\clock'=\clock$
+
+\end{description}
+
+
+
+\end{document}

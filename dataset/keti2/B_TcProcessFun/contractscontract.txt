@@ -1,0 +1,38 @@
+/*@
+logic integer sum(int* array, integer begin, integer end) =
+    end <= begin ? 0 : sum(array, begin, end - 1) + array[end - 1];
+*/
+
+/*@
+requires \valid(pkv + (0 .. len-1));
+requires \valid(chksum);
+requires \forall integer i; 0 <= i < 10 ==> 0 <= pkv[i] <= 100;
+requires 0 <= len <= 10;
+assigns *chksum;
+ensures *chksum == sum(pkv, 0, len); 
+*/
+void CheckCal(int len, int *pkv, int *chksum);
+
+
+/*@
+requires \valid(tcaData + (0 .. 3)); 
+requires \valid(FST_FLGMODE) && \valid(SND_FLGMODE) && \valid(TRD_FLGMODE); 
+requires \forall integer i; 0 <= i < 3 ==> 0 <= tcaData[i] <= 1000;
+requires \separated(tcaData + (0..3), FST_FLGMODE, SND_FLGMODE, TRD_FLGMODE);
+assigns *FST_FLGMODE, *SND_FLGMODE, *TRD_FLGMODE; 
+ensures (((tcaData[0] == 0xE1 && tcaData[1] == 0x00) && 
+            (tcaData[3] == sum(tcaData, 0, 3))) && tcaData[2] == 0) ==> 
+        (*FST_FLGMODE == 0x00 && *SND_FLGMODE == 0x00 && *TRD_FLGMODE == 0x00);
+ensures (((tcaData[0] == 0xE1 && tcaData[1] == 0x00) && 
+            (tcaData[3] == sum(tcaData, 0, 3))) && tcaData[2] == 1) ==> 
+        (*FST_FLGMODE == 0x33 && *SND_FLGMODE == 0x33 && *TRD_FLGMODE == 0x33);
+ensures (((tcaData[0] == 0xE1 && tcaData[1] == 0x00) && 
+            (tcaData[3] == sum(tcaData, 0, 3))) && tcaData[2] != 0 && tcaData[2] != 1) ==> 
+        (*FST_FLGMODE == 0x44 && *SND_FLGMODE == 0x44 && *TRD_FLGMODE == 0x44);
+ensures (!((tcaData[0] == 0xE1 && tcaData[1] == 0x00) && 
+            (tcaData[3] == sum(tcaData, 0, 3)))) ==> 
+        (*FST_FLGMODE == \old(*FST_FLGMODE) && 
+        *SND_FLGMODE == \old(*SND_FLGMODE) && 
+        *TRD_FLGMODE == \old(*TRD_FLGMODE));
+*/
+void B_TcProcess(int* tcaData, int* FST_FLGMODE, int* SND_FLGMODE, int* TRD_FLGMODE);
