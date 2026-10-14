@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import type { ChatMessage, Task } from '../types'
-import { statusLabel } from '../types'
+import { ipLabel, statusLabel } from '../types'
 import MessageItem from './MessageItem.vue'
 const props = defineProps<{ task: Task | null; selectedId: string; messages: ChatMessage[]; loading: boolean; error: string; streamError: string; streamState: string; active: boolean; draft: string; chatBusy: string; chatError: string; canSend: boolean; canPause: boolean; deleting: boolean }>()
 defineEmits<{ replay: []; send: []; pause: []; 'update:draft': [value: string] }>()
@@ -20,7 +20,10 @@ const streamLabels: Record<string, string> = { idle: '未连接', connecting: '�
 <template>
   <section class="conversation" aria-label="任务会话">
     <div class="panel-heading">
-      <h2>{{ selectedId || 'Agent 对话' }}</h2>
+      <div class="conversation-identity">
+        <h2>{{ task ? ipLabel(task) : selectedId || 'Agent 对话' }}</h2>
+        <p v-if="selectedId">projectID: {{ task?.projectID || '—' }} / taskID: {{ selectedId }}</p>
+      </div>
       <div class="heading-actions">
         <span v-if="task" class="status" :class="task.status">{{ statusLabel(task.status) }}</span>
         <button v-if="selectedId" class="icon-button" :disabled="loading || deleting || !!chatBusy" @click="$emit('replay')">重新加载</button>
@@ -35,7 +38,7 @@ const streamLabels: Record<string, string> = { idle: '未连接', connecting: '�
       <div v-if="loading" class="empty"><span class="loader"></span>正在加载任务与历史消息…</div>
       <div v-else-if="!selectedId" class="empty">
         <div class="empty-symbol">✦</div><h3>开始一次验证</h3>
-        <p>选择已有任务回放，或在右侧创建新任务。</p>
+        <p>选择左侧任务查看对话，或在项目验证中提交新任务。</p>
       </div>
       <template v-else>
         <MessageItem v-for="message in messages" :key="message.id" :message="message" />

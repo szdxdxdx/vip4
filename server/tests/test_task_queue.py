@@ -105,7 +105,8 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         tasks = self.manager.list_tasks()['tasks']
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]['task_id'], 'manual')
-        self.assertEqual(tasks[0]['prompt'], '保留原提示词')
+        self.assertEqual(tasks[0]['ip_name'], '')
+        self.assertNotIn('prompt', tasks[0])
 
     async def test_delete_waits_for_collection_before_removing_directory(self):
         self.manager.create_task('collecting', '任务', start=False)

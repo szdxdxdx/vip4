@@ -9,17 +9,26 @@ async function checked(response: Response): Promise<Response> {
   } catch { /* Non-JSON server error. */ }
   throw new Error(message)
 }
-export async function listTasks(): Promise<Task[]> {
-  return (await (await checked(await fetch('/task/list_tasks'))).json()).tasks
+export async function listTasks(projectID = '', taskId = '', signal?: AbortSignal): Promise<Task[]> {
+  const query = new URLSearchParams()
+  if (projectID.trim()) query.set('projectID', projectID.trim())
+  if (taskId.trim()) query.set('task_id', taskId.trim())
+  return (await (await checked(await fetch(`/task/list_tasks${query.size ? `?${query}` : ''}`, { signal }))).json()).tasks
+}
+export async function listDataset(signal?: AbortSignal): Promise<{ ips: { ip_name: string }[]; tools: string[] }> {
+  return (await checked(await fetch('/task/list_dataset', { signal }))).json()
+}
+export function taskZipUrl(id: string) {
+  return `/task/download_task?task_id=${encodeURIComponent(id)}`
 }
 export async function getTask(id: string, signal?: AbortSignal): Promise<TaskDetail> {
   return (await checked(await fetch(`/task/get_task?task_id=${encodeURIComponent(id)}`, { signal }))).json()
 }
-export async function createTask(id: string, prompt: string): Promise<void> {
-  await checked(await fetch('/task/create_task', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_id: id, prompt }),
-  }))
+export async function createTask(ipName: string, tool: string, userprompt: string, signal?: AbortSignal): Promise<{ task_id: string }> {
+  return (await checked(await fetch('/task/create_task', {
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip_name: ipName, tool, userprompt }),
+  }))).json()
 }
 export async function deleteTask(id: string): Promise<void> {
   await checked(await fetch(`/task/delete_task?task_id=${encodeURIComponent(id)}`, { method: 'DELETE' }))

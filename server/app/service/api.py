@@ -1,3 +1,7 @@
+from starlette.background import BackgroundTask
+from ..vip_task.archive import task_archive
+from typing import Literal
+from ..vip_task.inputs import create_local, dataset_list
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -16,20 +20,25 @@ router = APIRouter()
 
 
 class TaskRequest(BaseModel):
-    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
-    prompt: str = Field(min_length=1, pattern=r"\S")
+    ip_name: str = Field(min_length=1, max_length=128, pattern=r'^[^/\\]+$')
+    tool: Literal['CBMC', 'CPAchecker', 'KLEE']
+    userprompt: str | None = None
+
+
+@router.get('/task/list_dataset')
+def list_dataset():
+    return dataset_list()
 
 
 @router.post('/task/create_task', status_code=201)
 async def create_task(body: TaskRequest, request: Request):
     try:
-        # 项目映射永久保留，人工任务不得复用已经归属项目的 ID。
-        projects = getattr(request.app.state, 'project_manager', None)
-        if projects is not None and projects.store.has_task(body.task_id):
-            raise TaskExistsError('task_id 已归属项目，请使用新的任务 ID')
-        return request.app.state.task_manager.create_task(body.task_id, body.prompt)
+        return await create_local(request.app.state.task_manager, request.app.state.project_manager.store,
+                                  body.ip_name, body.tool, body.userprompt)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
     except (TaskExistsError, TaskDeletingError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from None
+        raise HTTPException(409, str(error)) from None
 
 
 @router.delete('/task/delete_task')
@@ -86,8 +95,9 @@ def _read_task(call, *args):
 
 
 @router.get('/task/list_tasks')
-def list_tasks(request: Request):
-    return _read_task(request.app.state.task_manager.list_tasks)
+async def list_tasks(request: Request, projectID: str | None = None, task_id: str | None = None,
+                     keti: Literal['keti2', 'keti3'] | None = None):
+    return _read_task(request.app.state.task_manager.list_tasks, projectID, task_id, keti)
 
 
 @router.get('/task/get_task')
@@ -145,3 +155,10 @@ async def send_message(body: SendMessageRequest, request: Request):
 @router.post('/task/pause_task')
 async def pause_task(body: ChatTaskRequest, request: Request):
     return await _chat_call(request.app.state.task_manager.pause_task, body.task_id)
+
+
+@router.get('/task/download_task')
+def download_task(task_id: str = Query(max_length=64, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')):
+    archive = _read_task(task_archive, task_id)
+    return FileResponse(archive, media_type='application/zip', filename=f'{task_id}.zip',
+                        background=BackgroundTask(archive.unlink, missing_ok=True))

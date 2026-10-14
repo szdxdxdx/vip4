@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from app.vip_task.keti3_sources import Keti3Sources, VERIFICATION_PROMPT
+from app.vip_task.keti3_sources import Keti3Sources
 
 
 def bundle(files):
@@ -41,7 +41,6 @@ class Keti3Tests(unittest.TestCase):
             items = self.keti3_sources.search('1001')
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['ipMsg']['entity']['basicInformation']['id'], 'keti3:1001')
-        self.assertEqual(items[0]['_verification_prompt'], VERIFICATION_PROMPT)
         request = get.call_args.args[0]
         self.assertEqual(request.full_url, 'http://keti3.test:50053/api/verify')
         self.assertEqual(request.get_method(), 'POST')
@@ -63,10 +62,6 @@ class Keti3Tests(unittest.TestCase):
         self.assertTrue(all(Path(row['path']).is_absolute() for row in records))
         self.assertEqual(records[0]['field'], 'keti3.archive')
         self.assertEqual(records[1]['source'], self.item['zip_url'] + '#SAM.c')
-        self.assertIn('IR', VERIFICATION_PROMPT)
-        self.assertIn('最外层', VERIFICATION_PROMPT)
-        self.assertIn('GBK/gb18030', VERIFICATION_PROMPT)
-        self.assertIn('规约缺失', VERIFICATION_PROMPT)
 
     def test_supplied_real_bundle_keeps_all_files(self):
         sample = Path(__file__).resolve().parents[2] / 'tmp' / 'NWM_synthesis.zip'
@@ -207,7 +202,7 @@ class Keti3ProjectTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((task.task_dir / 'input' / 'main.c').is_file())
             self.assertTrue((task.task_dir / 'keti3.zip').is_file())
             self.assertTrue((task.task_dir / 'files.csv').is_file())
-            self.assertIn(VERIFICATION_PROMPT, task.prompt)
+            self.assertIn('课题三整个产物', task.prompt)
             self.assertIn('检查入口函数', task.prompt)
             seen.append(task.task_id)
             metadata = Task._metadata(task.task_dir)
@@ -215,8 +210,8 @@ class Keti3ProjectTests(unittest.IsolatedAsyncioTestCase):
             _write_metadata(task.task_dir / 'task.json', metadata)
         with patch('app.vip_task.keti3_sources.urlopen', side_effect=self.response), patch.object(Task, 'run', run):
             await self.manager.submit('1001', '检查入口函数', source='keti3')
-            await self.manager.jobs['1001']
-            first = self.manager.progress('1001')
+            await self.manager.jobs[('keti3', '1001')]
+            first = self.manager.progress('1001', source='keti3')
             self.assertEqual(first['source'], 'keti3')
             self.assertEqual(first['status'], 'completed')
             self.assertEqual(first['total'], 1)
@@ -224,18 +219,18 @@ class Keti3ProjectTests(unittest.IsolatedAsyncioTestCase):
             old = first['tasks'][0]['task_id']
             self.assertRegex(old, r'^[0-9]{4}[a-z0-9]{4}$')
             await self.manager.submit('1001', '检查入口函数', source='keti3', force=True)
-            await self.manager.jobs['1001']
-            self.assertEqual(self.manager.progress('1001')['total'], 1)
+            await self.manager.jobs[('keti3', '1001')]
+            self.assertEqual(self.manager.progress('1001', source='keti3')['total'], 1)
             self.assertFalse((self.root / 'tasks' / old).exists())
             self.assertFalse(self.manager.store.has_task(old))
         self.assertEqual(len(seen), 2)
         self.keti2.search.assert_not_called()
         self.keti2.collect.assert_not_called()
-        await self.manager.delete('1001')
-        self.assertEqual(self.manager.store.tasks('1001'), [])
+        await self.manager.delete('1001', source='keti3')
+        self.assertEqual(self.manager.store.tasks('1001', 'keti3'), [])
         from app.vip_task.project import ProjectNotFoundError
         with self.assertRaises(ProjectNotFoundError):
-            self.manager.progress('1001')
+            self.manager.progress('1001', source='keti3')
         self.assertFalse((self.root / 'tasks' / seen[-1]).exists())
 
     async def test_bad_bundle_is_failed_without_starting_pi(self):
@@ -243,14 +238,14 @@ class Keti3ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.data = bundle([('../escape.c', b'bad')])
         with patch('app.vip_task.keti3_sources.urlopen', side_effect=self.response), patch.object(Task, 'run') as run:
             await self.manager.submit('1001', source='keti3')
-            await self.manager.jobs['1001']
-        result = self.manager.progress('1001')
+            await self.manager.jobs[('keti3', '1001')]
+        result = self.manager.progress('1001', source='keti3')
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['total'], 1)
         self.assertEqual(result['tasks'][0]['status'], 'failed')
         run.assert_not_called()
         self.assertFalse((self.root / 'tasks' / 'escape.c').exists())
-        await self.manager.delete('1001')
+        await self.manager.delete('1001', source='keti3')
         self.assertEqual(list((self.root / 'tasks').iterdir()), [])
 
 

@@ -17,15 +17,7 @@ logger = logging.getLogger(__name__)
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_INPUT_BYTES = 1024 * 1024 * 1024
 MAX_ENTRIES = 10000
-VERIFICATION_PROMPT = (
-    '这是课题三合成代码，将整个下载产物作为一个特殊软件 IP 验证，不拆成多个 IP 任务。'
-    '保留产物目录结构：IR 目录中的文件是形式模型；产物最外层的 .c 和 .h 是待验证 IP 的主代码；'
-    'iplib 目录中的代码是依赖，按主代码引用关系纳入编译和验证；优化版本和中间文件不要与根层主代码混编。'
-    '若 ZIP 含包装目录，以实际包含主代码的产物目录为根，不要把依赖误当主 IP。'
-    '输入文件可能使用 GBK/gb18030，按实际编码读取，原始输入不可改写；需要转换时复制到 workspace。'
-    '先检查并理解 IR 形式模型，再据此构造验证规约、驱动及结论。'
-    '若未提供 IR 或模型不可用，应明确报告规约缺失，不得宣称代码已符合未提供的形式模型。'
-)
+
 
 
 class Keti3Sources:
@@ -70,8 +62,8 @@ class Keti3Sources:
             raise ValueError(f'课题三打包失败：{message}')
         download_url = self._download_url(payload.get('zip_url'))
         return [{'ipId': f'keti3:{project_id}',
-                 'ipMsg': {'entity': {'basicInformation': {'id': f'keti3:{project_id}'}}},
-                 'zip_url': download_url, '_verification_prompt': VERIFICATION_PROMPT}]
+                 'ipMsg': {'entity': {'basicInformation': {'id': f'keti3:{project_id}', 'name': payload.get('project') if isinstance(payload.get('project'), str) else f'keti3:{project_id}'}}},
+                 'zip_url': download_url}]
 
     @staticmethod
     def _entries(archive: zipfile.ZipFile, directory: Path):

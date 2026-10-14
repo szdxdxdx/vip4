@@ -300,7 +300,7 @@ class Task:
         ):
             raise TaskMetadataError('任务聊天元数据格式错误')
         task = {'task_id': task_dir.name, **{
-            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id') if key in metadata
+            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id', 'ip_name', 'tool') if key in metadata
         }}
         task.setdefault('chatstatus', task['status'])
         task.setdefault('turn_id', 0)

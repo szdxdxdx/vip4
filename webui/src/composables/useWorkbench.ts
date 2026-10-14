@@ -17,8 +17,6 @@ export function useWorkbench() {
   const listError = ref('')
   const detailError = ref('')
   const streamError = ref('')
-  const createError = ref('')
-  const creating = ref(false)
   const deletingId = ref('')
   const deleteError = ref('')
   const drafts = ref<Record<string, string>>({})
@@ -190,19 +188,6 @@ export function useWorkbench() {
     }
     await refreshTasks()
   }
-  async function submit(id: string, prompt: string) {
-    if (creating.value) return false
-    creating.value = true
-    createError.value = ''
-    try {
-      await api.createTask(id.trim(), prompt.replaceAll('<task_id>', id.trim()))
-      deletedIds.delete(id.trim())
-      await refreshTasks()
-      void selectTask(id.trim())
-      return true
-    } catch (error) { createError.value = errorText(error); return false }
-    finally { creating.value = false }
-  }
   async function control(action: 'send' | 'pause') {
     if (action === 'send' ? !canSend.value : !canPause.value) return
     const id = selectedId.value, version = generation
@@ -258,7 +243,7 @@ export function useWorkbench() {
   }
   onBeforeUnmount(() => { generation++; listGeneration++; controller?.abort() })
   return { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
-    listError, detailError, streamError, createError, creating, deletingId, deleteError, removeTask, refreshTasks, selectTask,
+    listError, detailError, streamError, deletingId, deleteError, removeTask, refreshTasks, selectTask,
     draft, chatBusy, chatError, canSend, canPause, sendMessage: () => control('send'), pauseTask: () => control('pause'),
-    submit, initialize, resetHistory, refreshSelected }
+    initialize, resetHistory, refreshSelected }
 }

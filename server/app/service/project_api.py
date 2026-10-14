@@ -14,11 +14,13 @@ router = APIRouter(prefix='/project')
 
 class ProjectDeleteRequest(BaseModel):
     projectID: str = Field(min_length=1, pattern=r'\S')
+    source: Literal['keti2', 'keti3']
 
 
 class ProjectRequest(ProjectDeleteRequest):
     source: Literal['keti2', 'keti3'] = 'keti2'
-    prompt: str | None = Field(default=None, min_length=1, pattern=r'\S')
+    tool: Literal['CBMC', 'CPAchecker', 'KLEE'] = 'CBMC'
+    userprompt: str | None = None
     force: bool = False
 
     @model_validator(mode='after')
@@ -32,7 +34,7 @@ class ProjectRequest(ProjectDeleteRequest):
 async def create_project(body: ProjectRequest, request: Request):
     try:
         return await request.app.state.project_manager.submit(
-            body.projectID, body.prompt, force=body.force, source=body.source)
+            body.projectID, body.userprompt, force=body.force, source=body.source, tool=body.tool)
     except (ProjectConflictError, TaskDeletingError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
     except ValueError as error:
@@ -48,7 +50,7 @@ async def create_project(body: ProjectRequest, request: Request):
 @router.post('/delete_project')
 async def delete_project(body: ProjectDeleteRequest, request: Request):
     try:
-        return await request.app.state.project_manager.delete(body.projectID)
+        return await request.app.state.project_manager.delete(body.projectID, source=body.source)
     except ProjectNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from None
     except (ProjectConflictError, TaskDeletingError) as error:
@@ -61,18 +63,20 @@ async def delete_project(body: ProjectDeleteRequest, request: Request):
         raise HTTPException(status_code=500, detail='项目删除失败：任务未完整删除，请重试') from None
 
 
-def _query(call, project_id: str):
+def _query(call, project_id: str, source: str):
     try:
-        return _read_task(call, project_id)
+        return _read_task(lambda: call(project_id, source=source))
     except ProjectNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from None
 
 
 @router.get('/get_progress')
-async def get_progress(request: Request, projectID: str = Query(min_length=1, pattern=r'\S')):
-    return _query(request.app.state.project_manager.progress, projectID)
+async def get_progress(request: Request, projectID: str = Query(min_length=1, pattern=r'\S'),
+                       source: Literal['keti2', 'keti3'] = Query()):
+    return _query(request.app.state.project_manager.progress, projectID, source)
 
 
 @router.get('/get_results')
-async def get_results(request: Request, projectID: str = Query(min_length=1, pattern=r'\S')):
-    return _query(request.app.state.project_manager.results, projectID)
+async def get_results(request: Request, projectID: str = Query(min_length=1, pattern=r'\S'),
+                       source: Literal['keti2', 'keti3'] = Query()):
+    return _query(request.app.state.project_manager.results, projectID, source)

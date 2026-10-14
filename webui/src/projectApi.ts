@@ -1,4 +1,4 @@
-import type { ProjectProgress, ProjectResults, ProjectSource } from './projectTypes'
+import type { ProjectSource } from './projectTypes'
 
 async function request<T>(url: string, options: RequestInit): Promise<T> {
   const response = await fetch(url, options)
@@ -12,21 +12,15 @@ async function request<T>(url: string, options: RequestInit): Promise<T> {
   }
   return response.json()
 }
-export function createProject(projectID: string, prompt: string, signal: AbortSignal, force = false, source: ProjectSource = 'keti2') {
-  return request<{ projectID: string; status: 'accepted' }>('/project/create_project', {
+export function createProject(projectID: string, userprompt: string, signal: AbortSignal, force: boolean, source: ProjectSource, tool: string) {
+  return request<{ projectID: string; status: string }>('/project/create_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, ...(source === 'keti3' ? { source } : {}), ...(force ? { force: true } : {}), ...(prompt.trim() ? { prompt } : {}) }),
+    body: JSON.stringify({ projectID, source, force, userprompt, tool }),
   })
 }
-export function deleteProject(projectID: string, signal: AbortSignal) {
+export function deleteProject(projectID: string, source: ProjectSource, signal: AbortSignal) {
   return request<{ projectID: string; status: 'deleted' }>('/project/delete_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID }),
+    body: JSON.stringify({ projectID, source }),
   })
-}
-export function getProjectProgress(id: string, signal: AbortSignal) {
-  return request<ProjectProgress>(`/project/get_progress?projectID=${encodeURIComponent(id)}`, { signal })
-}
-export function getProjectResults(id: string, signal: AbortSignal) {
-  return request<ProjectResults>(`/project/get_results?projectID=${encodeURIComponent(id)}`, { signal })
 }

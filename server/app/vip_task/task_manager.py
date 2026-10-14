@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class TaskManager:
     def __init__(self):
+        self.store = None
         self.tasks: dict[str, Task] = {}
         self.deleting: set[str] = set()
         # 所有入口共用一把锁，避免人工任务和项目任务抢占验证资源。
@@ -190,7 +191,13 @@ class TaskManager:
     async def delete_task(self, task_id: str) -> dict:
         if task_id in self.deleting:
             raise TaskDeletingError('任务正在删除，请稍后重试')
-        Task._task_dir(task_id)
+        try:
+            Task._task_dir(task_id)
+        except TaskNotFoundError:
+            if self.store is None or not self.store.has_task(task_id):
+                raise
+            self.store.remove_task(task_id)
+            return {'task_id': task_id, 'status': 'deleted'}
         # 历史任务删除不加载对话，损坏的记录不能阻止永久清理。
         task = self.tasks.get(task_id)
         # 首次校验到标记之间不让出执行权，阻止重复删除和同 ID 重建。
@@ -212,6 +219,8 @@ class TaskManager:
                     await asyncio.gather(task.job, return_exceptions=True)
             await asyncio.to_thread(shutil.rmtree, Task._task_dir(task_id))
             self.tasks.pop(task_id, None)
+            if self.store is not None:
+                self.store.remove_task(task_id)
             logger.info('任务已删除 task_id=%s', task_id)
 
         operation = asyncio.create_task(remove())
@@ -226,32 +235,33 @@ class TaskManager:
         finally:
             self.deleting.discard(task_id)
 
-    def list_tasks(self) -> dict:
+    def list_tasks(self, projectID=None, task_id=None, keti=None) -> dict:
+        entries = {entry['task_id']: entry for entry in self.store.all_entries()} if self.store else {}
         root = config.VIP_TASK_DIR
-        if not root.is_dir():
-            return {'tasks': []}
+        if root.is_dir():
+            for directory in root.iterdir():
+                if re.fullmatch(TASK_ID_PATTERN, directory.name) and len(directory.name) <= 64 and directory.is_dir():
+                    entries.setdefault(directory.name, {'task_id': directory.name, 'projectID': None, 'keti': None, 'ip_id': ''})
         tasks = []
-        # 仅枚举任务根目录的直接子目录，忽略不可读或无效任务。
-        for entry in root.iterdir():
-            if not re.fullmatch(TASK_ID_PATTERN, entry.name) or len(entry.name) > 64:
+        for entry in entries.values():
+            if (projectID is not None and entry['projectID'] != projectID or
+                task_id is not None and entry['task_id'] != task_id or
+                keti is not None and entry['keti'] != keti):
                 continue
+            directory = root / entry['task_id']
+            missing = not directory.is_dir()
+            row = {**entry, 'ip_name': '', 'status': 'missing', 'chatstatus': 'missing',
+                   'missing_directory': missing, 'directory_missing': missing, 'data_missing': False}
             try:
-                task = Task._metadata(Task._task_dir(entry.name))
-                task['prompt'] = self._get_task(entry.name).get_prompt()
-                tasks.append(task)
-            except (TaskNotFoundError, TaskPathError, TaskMetadataError, OSError):
-                continue
-
-        def created_order(task):
-            try:
-                created = datetime.fromisoformat(task['created_at'])
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                return created.timestamp(), task['task_id']
-            except (ValueError, OverflowError):
-                return float('-inf'), task['task_id']
-
-        tasks.sort(key=created_order, reverse=True)
+                metadata = Task._metadata(Task._task_dir(entry['task_id']))
+                row.update({key: metadata[key] for key in ('ip_name', 'created_at', 'chatstatus') if key in metadata})
+                row['status'] = metadata.get('verification_status', metadata['status'])
+                row['data_missing'] = any(not (directory / name).is_dir() or (directory / name).is_symlink()
+                                          for name in ('input', 'workspace', 'pi_session'))
+            except (TaskNotFoundError, TaskPathError, TaskMetadataError, OSError, ValueError):
+                row['data_missing'] = not missing
+            tasks.append(row)
+        tasks.sort(key=lambda row: (row.get('created_at', ''), row['task_id']), reverse=True)
         return {'tasks': tasks}
 
     def get_task(self, task_id: str) -> dict:

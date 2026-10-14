@@ -2,7 +2,7 @@ export const atticalPrompt = `请使用 SKILL verify-ip，使用 CBMC，按 skil
 
 指定 IP：AttiCal。
 <ip> = AttiCal。
-<input>/ = /app/vip4/dataset/16-ip/，输入数据只读。
+<input>/ = /app/vip4/tasks/<task_id>/input/，输入数据只读。
 头文件搜索路径：<input>/include/。
 待验证 IP 形式模型：<input>/ip/AttiCal/formal_model/*.tex。
 待验证 IP 代码：<input>/ip/AttiCal/implementation/*.c、*.h。

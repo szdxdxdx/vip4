@@ -3,10 +3,7 @@ import asyncio
 import logging
 import json
 import os
-import secrets
-import string
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlencode
@@ -14,10 +11,11 @@ from urllib.parse import urlencode
 from . import config
 from .keti2_sources import Keti2Sources
 from .keti3_sources import Keti3Sources
-from .task import Task, TaskExistsError, TaskNotFoundError, _write_metadata
+from .task import Task, TaskNotFoundError, TaskPathError, TaskMetadataError, _write_metadata
 
 logger = logging.getLogger(__name__)
-TERMINAL = {'completed', 'failed', 'cancelled', 'deleted'}
+TERMINAL = {'completed', 'failed', 'cancelled', 'deleted', 'missing'}
+ProjectKey = tuple[str, str]
 
 
 class ProjectConflictError(Exception):
@@ -32,31 +30,42 @@ class ProjectStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
-        self.db.execute('CREATE TABLE IF NOT EXISTS project_tasks '
-                        "(task_id TEXT PRIMARY KEY, projectID TEXT NOT NULL, ip_id TEXT NOT NULL DEFAULT '')")
-        # 已有映射自动补列，保留历史任务及归属。
-        columns = {row[1] for row in self.db.execute('PRAGMA table_info(project_tasks)')}
-        if 'ip_id' not in columns:
-            self.db.execute("ALTER TABLE project_tasks ADD COLUMN ip_id TEXT NOT NULL DEFAULT ''")
-        self.db.execute('CREATE INDEX IF NOT EXISTS project_id ON project_tasks(projectID)')
-        self.db.commit()
+        # 重建旧表以解除 projectID 非空约束，历史来源保持 NULL。
+        with self.db:
+            self.db.execute("CREATE TABLE IF NOT EXISTS project_tasks (task_id TEXT PRIMARY KEY, projectID TEXT, ip_id TEXT NOT NULL DEFAULT '', keti TEXT)")
+            columns = {row[1]: row for row in self.db.execute('PRAGMA table_info(project_tasks)')}
+            if 'keti' not in columns or 'ip_id' not in columns or columns['projectID'][3]:
+                self.db.execute("CREATE TABLE project_tasks_new (task_id TEXT PRIMARY KEY, projectID TEXT, ip_id TEXT NOT NULL DEFAULT '', keti TEXT)")
+                ip = 'ip_id' if 'ip_id' in columns else "''"
+                keti = 'keti' if 'keti' in columns else 'NULL'
+                self.db.execute(f'INSERT INTO project_tasks_new SELECT task_id, projectID, {ip}, {keti} FROM project_tasks')
+                self.db.execute('DROP TABLE project_tasks')
+                self.db.execute('ALTER TABLE project_tasks_new RENAME TO project_tasks')
+            self.db.execute('CREATE INDEX IF NOT EXISTS project_id ON project_tasks(keti, projectID)')
 
-    def tasks(self, project_id: str) -> list[str]:
-        return [row[0] for row in self.db.execute(
-            'SELECT task_id FROM project_tasks WHERE projectID=? ORDER BY rowid', (project_id,))]
+    def tasks(self, project_id: str, keti: str | None = None) -> list[str]:
+        return [entry['task_id'] for entry in self.entries(project_id, keti)]
 
-    def entries(self, project_id: str) -> list[dict]:
+    def entries(self, project_id: str, keti: str | None = None) -> list[dict]:
         return [{'task_id': task_id, 'ip_id': ip_id} for task_id, ip_id in self.db.execute(
-            'SELECT task_id, ip_id FROM project_tasks WHERE projectID=? ORDER BY rowid', (project_id,))]
+            'SELECT task_id, ip_id FROM project_tasks WHERE projectID=? AND keti IS ? ORDER BY rowid', (project_id, keti))]
 
-    def add(self, task_id: str, project_id: str, ip_id: str):
-        with self.db:
-            self.db.execute('INSERT INTO project_tasks (task_id, projectID, ip_id) VALUES (?, ?, ?)',
-                            (task_id, project_id, ip_id))
+    def all_entries(self) -> list[dict]:
+        return [dict(zip(('task_id', 'projectID', 'ip_id', 'keti'), row)) for row in self.db.execute(
+            'SELECT task_id, projectID, ip_id, keti FROM project_tasks ORDER BY rowid DESC')]
 
-    def remove(self, project_id: str):
+    def add(self, task_id: str, project_id: str | None, ip_id: str, keti: str | None = None):
         with self.db:
-            self.db.execute('DELETE FROM project_tasks WHERE projectID=?', (project_id,))
+            self.db.execute('INSERT INTO project_tasks (task_id, projectID, ip_id, keti) VALUES (?, ?, ?, ?)',
+                            (task_id, project_id, ip_id, keti))
+
+    def remove(self, project_id: str, keti: str):
+        with self.db:
+            self.db.execute('DELETE FROM project_tasks WHERE projectID=? AND keti=?', (project_id, keti))
+
+    def remove_task(self, task_id: str):
+        with self.db:
+            self.db.execute('DELETE FROM project_tasks WHERE task_id=?', (task_id,))
 
     def has_task(self, task_id: str) -> bool:
         return self.db.execute('SELECT 1 FROM project_tasks WHERE task_id=?', (task_id,)).fetchone() is not None
@@ -73,99 +82,105 @@ class ProjectManager:
         self.keti3_sources = keti3_sources or Keti3Sources()
         self.store = store or ProjectStore(Path(os.getenv(
             'VIP_PROJECT_DB', str(config.VIP_TASK_DIR.parent / 'projects.sqlite3'))))
-        self.projects: dict[str, dict] = {}
-        self.jobs: dict[str, asyncio.Task] = {}
+        self.task_manager.store = self.store
+        self.projects: dict[ProjectKey, dict] = {}
+        self.jobs: dict[ProjectKey, asyncio.Task] = {}
         # 映射写入及回滚同时失败时保留归属，供本进程查询和再次清理。
-        self.unmapped: dict[str, list[dict]] = {}
+        self.unmapped: dict[ProjectKey, list[dict]] = {}
         self.closed = False
         # 删除与强制重建共用并发保护，直到独立清理协程结束才释放。
-        self.resets: dict[str, asyncio.Task] = {}
+        self.resets: dict[ProjectKey, asyncio.Task] = {}
         self._close_job: asyncio.Task | None = None
 
     async def submit(self, project_id: str, prompt: str | None = None, *, force: bool = False,
-                     source: Literal['keti2', 'keti3'] = 'keti2'):
+                     source: Literal['keti2', 'keti3'] = 'keti2', tool: str = 'CBMC'):
+        from .inputs import TOOLS
+        if tool not in TOOLS:
+            raise ValueError('不支持的验证工具')
+        key: ProjectKey = (source, project_id)
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
-        if project_id in self.resets:
+        if key in self.resets:
             raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
-        exists = project_id in self.projects or self._entries(project_id)
+        exists = key in self.projects or self._entries(key)
         if exists and not force:
             raise ProjectConflictError('项目已提交；可选择强制提交删除旧任务并重新验证')
         if source == 'keti3':
-            self.keti3_sources.validate(project_id)
+            self.keti3_sources.validate(key[1])
         if not force:
-            return self._start(project_id, prompt, source)
-        return await self._operation(project_id, self._replace(project_id, prompt, source))
+            return self._start(key, prompt, tool)
+        return await self._operation(key, self._replace(key, prompt, tool))
 
-    async def delete(self, project_id: str):
+    async def delete(self, project_id: str, *, source: str):
+        key: ProjectKey = (source, project_id)
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
-        if project_id in self.resets:
+        if key in self.resets:
             raise ProjectConflictError('项目正在删除或强制重建，请稍后重试')
-        if project_id not in self.projects and not self._entries(project_id):
+        if key not in self.projects and not self._entries(key):
             raise ProjectNotFoundError('项目不存在')
-        return await self._operation(project_id, self._delete(project_id), 'deleting')
+        return await self._operation(key, self._delete(key), 'deleting')
 
-    async def _operation(self, project_id: str, cleanup, status: str = 'resetting'):
-        self.projects[project_id] = {**self.projects.get(project_id, {}), 'status': status}
+    async def _operation(self, key: ProjectKey, cleanup, status: str = 'resetting'):
+        self.projects[key] = {**self.projects.get(key, {}), 'status': status}
         operation = asyncio.create_task(cleanup)
-        self.resets[project_id] = operation
+        self.resets[key] = operation
         def finished(job):
             # 并发保护由清理操作释放，不受 HTTP 请求重复取消影响。
-            if self.resets.get(project_id) is job:
-                self.resets.pop(project_id, None)
+            if self.resets.get(key) is job:
+                self.resets.pop(key, None)
             if not job.cancelled():
                 job.exception()
         operation.add_done_callback(finished)
         return await asyncio.shield(operation)
 
-    def _start(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
+    def _start(self, key: ProjectKey, prompt: str | None, tool: str):
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
-        self.projects[project_id] = {'status': 'accepted', 'source': source}
-        self.jobs[project_id] = asyncio.create_task(self._run(project_id, prompt, source))
-        logger.info('项目已接受 projectID=%s', project_id)
-        return {'projectID': project_id, 'status': 'accepted'}
+        self.projects[key] = {'status': 'accepted', 'source': key[0]}
+        self.jobs[key] = asyncio.create_task(self._run(key, prompt, tool))
+        logger.info('项目已接受 projectID=%s', key)
+        return {'projectID': key[1], 'keti': key[0], 'status': 'accepted'}
 
-    async def _replace(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
-        await self._cleanup(project_id, 'resetting')
+    async def _replace(self, key: ProjectKey, prompt: str | None, tool: str):
+        await self._cleanup(key, 'resetting')
         try:
-            return self._start(project_id, prompt, source)
+            return self._start(key, prompt, tool)
         except Exception as error:
-            self.projects[project_id] = {'status': 'failed', 'error': str(error), 'requires_resubmit': True}
+            self.projects[key] = {'status': 'failed', 'error': str(error), 'requires_resubmit': True}
             raise
 
-    async def _delete(self, project_id: str):
-        await self._cleanup(project_id, 'deleting')
-        self.projects.pop(project_id, None)
-        return {'projectID': project_id, 'status': 'deleted'}
+    async def _delete(self, key: ProjectKey):
+        await self._cleanup(key, 'deleting')
+        self.projects.pop(key, None)
+        return {'projectID': key[1], 'keti': key[0], 'status': 'deleted'}
 
-    async def _cleanup(self, project_id: str, status: str):
-        state = {**self.projects.get(project_id, {}), 'status': status}
-        self.projects[project_id] = state
-        logger.info('开始项目清理 projectID=%s status=%s', project_id, status)
+    async def _cleanup(self, key: ProjectKey, status: str):
+        state = {**self.projects.get(key, {}), 'status': status}
+        self.projects[key] = state
+        logger.info('开始项目清理 projectID=%s status=%s', key, status)
         try:
-            job = self.jobs.get(project_id)
+            job = self.jobs.get(key)
             if job is not None:
                 if not job.done():
                     job.cancel()
                 await asyncio.gather(job, return_exceptions=True)
             # 旧编排的 finally 可能写 cancelled，保持清理状态直至删除完成。
-            self.projects[project_id] = state
-            for entry in self._entries(project_id):
+            self.projects[key] = state
+            for entry in self._entries(key):
                 task_id = entry['task_id']
                 try:
                     await self.task_manager.delete_task(task_id)
                 except TaskNotFoundError:
                     pass
             # 文件全部删除成功后才移除映射；失败时保留归属供查询及重试。
-            self.store.remove(project_id)
-            self.unmapped.pop(project_id, None)
-            self.jobs.pop(project_id, None)
-            logger.info('旧项目任务已清理 projectID=%s', project_id)
+            self.store.remove(key[1], key[0])
+            self.unmapped.pop(key, None)
+            self.jobs.pop(key, None)
+            logger.info('旧项目任务已清理 projectID=%s', key)
         except Exception as error:
-            self.projects[project_id] = {**state, 'status': 'failed', 'error': f'项目清理失败：{error}', 'requires_resubmit': True}
-            logger.exception('项目清理失败 projectID=%s', project_id)
+            self.projects[key] = {**state, 'status': 'failed', 'error': f'项目清理失败：{error}', 'requires_resubmit': True}
+            logger.exception('项目清理失败 projectID=%s', key)
             raise
 
     async def _blocking(self, call, *args):
@@ -177,43 +192,15 @@ class ProjectManager:
             await asyncio.gather(job, return_exceptions=True)
             raise
 
-    def _create(self, project_id: str, prompt: str | None, ip_id: str) -> str:
-        for _ in range(1000):
-            task_id = datetime.now().strftime('%m%d') + ''.join(
-                secrets.choice(string.ascii_lowercase + string.digits) for _ in range(4))
-            if self.store.has_task(task_id):
-                continue
-            directory = (config.VIP_TASK_DIR / task_id).resolve()
-            instructions = (
-                f'使用 verify-ip SKILL，使用 CBMC 对此软件 IP 进行完整形式化验证。\n'
-                f'只读输入目录：{directory / "input"}\n'
-                f'输入来源清单：{directory / "files.csv"}\n'
-                f'报告按 SKILL 约定写入 {directory / "workspace"}/<tool>_suite/output'
-                f'（CBMC 使用 cbmc_suite/output），驱动、配置和工具输出遵循 SKILL 目录约定；'
-                f'临时文件写入 workspace/tmp。'
-            )
-            if prompt:
-                instructions += f'\n用户要求：{prompt}'
-            try:
-                self.task_manager.create_task(task_id, instructions, start=False)
-            except TaskExistsError:
-                continue
-            try:
-                self.store.add(task_id, project_id, ip_id)
-            except Exception:
-                try:
-                    # 尚未准备输入或启动，无异步资源；删除成功后才移除缓存。
-                    self.task_manager.tasks[task_id].delete_files()
-                    self.task_manager.tasks.pop(task_id, None)
-                except Exception:
-                    self.unmapped.setdefault(project_id, []).append(
-                        {'task_id': task_id, 'ip_id': ip_id})
-                    self._mark_unfinished(task_id)
-                    logger.exception('创建回滚失败，保留内存归属供清理重试 projectID=%s task_id=%s',
-                                     project_id, task_id)
-                raise
-            return task_id
-        raise RuntimeError('无法分配任务 ID：碰撞重试次数超限')
+    def _create(self, key: ProjectKey, prompt: str | None, ip_id: str, ip_name: str = '', tool: str = 'CBMC') -> str:
+        from .inputs import create_registered, CreationRollbackError
+        try:
+            return create_registered(self.task_manager, self.store, ip_name, tool, prompt,
+                                     project_id=key[1], keti=key[0], ip_id=ip_id)['task_id']
+        except CreationRollbackError as error:
+            self.unmapped.setdefault(key, []).append({'task_id': error.task_id, 'ip_id': ip_id})
+            self._mark_unfinished(error.task_id)
+            raise
 
     def _mark_unfinished(self, task_id: str, status: str = 'cancelled'):
         # 原验证结束后可能已开始续聊；活跃 job 的状态由任务自身维护。
@@ -236,12 +223,12 @@ class ProjectManager:
         except (OSError, ValueError, KeyError):
             logger.exception('无法更新任务状态 task_id=%s status=%s', task_id, status)
 
-    async def _run(self, project_id: str, prompt: str | None, source: Literal['keti2', 'keti3'] = 'keti2'):
-        state = self.projects[project_id]
-        sources = self.keti3_sources if source == 'keti3' else self.keti2_sources
+    async def _run(self, key: ProjectKey, prompt: str | None, tool: str):
+        state = self.projects[key]
+        sources = self.keti3_sources if key[0] == 'keti3' else self.keti2_sources
         try:
             state['status'] = 'collecting'
-            items = await self._blocking(sources.search, project_id)
+            items = await self._blocking(sources.search, key[1])
             if not items:
                 state['status'] = 'empty'
                 return
@@ -250,19 +237,20 @@ class ProjectManager:
             pairs = []
             for item in items:
                 try:
-                    # 只保存实体模型的业务标识，不记录 name 或数据库数字 ipId。
-                    value = item
-                    for key in ('ipMsg', 'entity', 'basicInformation', 'id'):
-                        value = value.get(key) if isinstance(value, dict) else None
-                    ip_id = value.strip() if isinstance(value, str) else ''
-                    task_prompt = prompt
-                    if source == 'keti3':
-                        task_prompt = '\n'.join(filter(None, (item['_verification_prompt'], prompt)))
-                    pairs.append((self._create(project_id, task_prompt, ip_id), item))
+                    # 数据库只保存业务标识，名称写入任务元数据。
+                    basic = item
+                    for field in ('ipMsg', 'entity', 'basicInformation'):
+                        basic = basic.get(field) if isinstance(basic, dict) else None
+                    basic = basic if isinstance(basic, dict) else {}
+                    ip_id = basic.get('id')
+                    ip_id = ip_id.strip() if isinstance(ip_id, str) else ''
+                    name = basic.get('name')
+                    name = name.strip() if isinstance(name, str) else ''
+                    pairs.append((self._create(key, prompt, ip_id, name, tool), item))
                 except Exception as error:
                     state['requires_resubmit'] = True
                     errors.append(f'IP {item["ipId"]} 创建失败：{error}')
-                    logger.exception('IP 创建失败 projectID=%s ipId=%s', project_id, item['ipId'])
+                    logger.exception('IP 创建失败 projectID=%s ipId=%s', key, item['ipId'])
             ready = []
             for task_id, item in pairs:
                 try:
@@ -295,11 +283,11 @@ class ProjectManager:
             raise
         except Exception as error:
             state.update(status='failed', error=str(error))
-            logger.exception('项目执行失败 projectID=%s', project_id)
+            logger.exception('项目执行失败 projectID=%s', key)
         finally:
-            for entry in self._entries(project_id):
+            for entry in self._entries(key):
                 self._mark_unfinished(entry['task_id'])
-            logger.info('项目状态 projectID=%s status=%s', project_id, state['status'])
+            logger.info('项目状态 projectID=%s status=%s', key, state['status'])
 
     def _task(self, task_id: str) -> dict:
         try:
@@ -309,18 +297,21 @@ class ProjectManager:
                 task['chatstatus'] = task.get('chatstatus', task['status'])
                 task['status'] = task['verification_status']
             return task
-        except TaskNotFoundError:
-            return {'task_id': task_id, 'status': 'deleted'}
+        except (TaskNotFoundError, TaskPathError, TaskMetadataError, OSError):
+            missing = not (config.VIP_TASK_DIR / task_id).is_dir()
+            return {'task_id': task_id, 'ip_name': '', 'status': 'missing',
+                    'directory_missing': missing, 'data_missing': not missing}
 
-    def _entries(self, project_id: str) -> list[dict]:
-        entries = self.store.entries(project_id)
+    def _entries(self, key: ProjectKey) -> list[dict]:
+        entries = self.store.entries(key[1], key[0])
         mapped = {entry['task_id'] for entry in entries}
-        return entries + [entry for entry in self.unmapped.get(project_id, [])
+        return entries + [entry for entry in self.unmapped.get(key, [])
                           if entry['task_id'] not in mapped]
 
-    def progress(self, project_id: str) -> dict:
-        entries = self._entries(project_id)
-        state = self.projects.get(project_id)
+    def progress(self, project_id: str, *, source: str) -> dict:
+        key: ProjectKey = (source, project_id)
+        entries = self._entries(key)
+        state = self.projects.get(key)
         if not entries and state is None:
             raise ProjectNotFoundError('项目不存在')
         tasks = [{**self._task(entry['task_id']), 'ip_id': entry['ip_id']} for entry in entries]
@@ -335,15 +326,15 @@ class ProjectManager:
                       else 'failed')
             state = {'status': status}
         state = {key: value for key, value in state.items() if key != 'requires_resubmit'}
-        return {'projectID': project_id, **state, 'total': len(tasks),
+        return {'projectID': key[1], 'keti': key[0], **state, 'total': len(tasks),
                 'finished': sum(t['status'] in TERMINAL for t in tasks), 'tasks': tasks}
 
-    def results(self, project_id: str) -> dict:
-        progress = self.progress(project_id)
+    def results(self, project_id: str, *, source: str) -> dict:
+        progress = self.progress(project_id, source=source)
         tasks = []
         for task in progress['tasks']:
             files = []
-            if task['status'] != 'deleted':
+            if task['status'] not in ('deleted', 'missing'):
                 for file in self.task_manager.get_task(task['task_id'])['files']:
                     if 'output' not in Path(file['path']).parts[:-1]:
                         continue
@@ -351,7 +342,7 @@ class ProjectManager:
                         'task_id': task['task_id'], 'path': file['path'], 'download': 'true'})})
             tasks.append({'task_id': task['task_id'], 'ip_id': task['ip_id'],
                           'status': task['status'], 'files': files})
-        return {'projectID': project_id, 'tasks': tasks}
+        return {'projectID': project_id, 'keti': source, 'tasks': tasks}
 
     async def close(self):
         self.closed = True

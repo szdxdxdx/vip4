@@ -1,84 +1,82 @@
-# 后端项目验证
+# 后端验证服务
 
-## 启动与接口
+## 启动与数据
 
-在 `server/` 执行 `uv run main.py --backend-only`。使用单进程部署，队列及验证资源锁在进程内共享。任务与项目接口均无 `/api` 前缀；若部署代理添加前缀，应同时代理下载链接。
+在 `server/` 执行 `uv run main.py --backend-only`，不加该参数则同时提供编译后的前端。使用单进程部署：验证和续聊共用串行资源锁，所有 HTTP 路径无 `/api` 前缀。
 
-- `POST /project/create_project`：正文 `{ "projectID": "项目标识", "prompt": "可选验证要求", "force": false, "source": "keti2" }`。普通提交立即返回 HTTP 202、`{projectID,status:"accepted"}`，后台查询并准备输入；已有项目返回 HTTP 409。
+任务目录为 `tasks/<task_id>/`，包含只读 `input/`、来源清单 `files.csv`、`task.json`、Pi 会话 `pi_session/` 和工作目录 `workspace/`。ID 自动分配为 MMDD 加四位随机字母/数字，目录、缓存或数据库碰撞均重新生成，不覆盖旧任务。SQLite `project_tasks` 只保存 `task_id`、`projectID`、`ip_id` 和 `keti`；IP 名称和工具写入任务元数据，不放入数据库。
 
-  `force=true` 表示永久替换：停止旧项目编排及其验证/聊天，等待输入收集和 Pi 资源释放，删除该项目全部任务目录和数据库映射，再重新查询并验证。响应 202 前完成旧数据清理，期间进度为 resetting，同项目的并发提交或删除返回 409。不存在的项目也可强制提交。请求断开不取消已接受的清理；删除失败保留旧映射、返回错误并允许再次强制提交，不启动新验证。其他项目和手动任务不受影响。
-- `POST /project/delete_project`：正文 `{ "projectID": "项目标识" }`，成功返回 HTTP 200、`{projectID,status:"deleted"}`。永久删除该项目所有任务目录、SQLite 映射及项目/任务缓存。先停止原编排，等待查询和输入收集结束、验证/聊天停止并释放 Pi 资源；期间进度为 deleting，同项目的删除、普通提交或 force 返回 409。未知项目返回 404。请求断开或重复取消不打断清理；服务关闭会等待已接受的清理。删除失败保留全部映射，进度为 failed（不会被旧 completed 任务覆盖），可再次删除或 force 重试；权限错误返回 403，文件删除错误返回 500。部分已删除目录无需恢复，重试会跳过不存在的任务。成功后项目查询返回 404，可重新提交同 ID；其他项目和人工任务不受影响。
-- `GET /project/get_progress?projectID=...`：返回 `{projectID,status,error?,total,finished,tasks:[{task_id,ip_id,status,created_at,...}]}`。`finished` 包含 completed、failed、cancelled、deleted 的任务。进度仅读取任务元数据，不扫描产物。
-- `GET /project/get_results?projectID=...`：返回 `{projectID,tasks:[{task_id,ip_id,status,files:[{path,size,kind,download_url}]}]}`。只返回 `output` 目录中的文件，包含 SKILL 的 `cbmc_suite/output/` 等工具目录；不返回 input、会话、驱动及非 output 产物。`path` 相对任务 workspace，`download_url` 复用 `/task/get_file?task_id=...&path=...&download=true`。
+`keti` 为 keti2、keti3 或 NULL；本地任务的 keti 和 projectID 均为 NULL。项目查询、删除和 force 以 `(keti, projectID)` 隔离，相同项目ID可以同时用于课题二和课题三。旧数据库启动时迁移为允许 projectID=NULL 的结构，补充 keti 列，历史值保持 NULL，绝不推断归类。历史归属只能通过 task_id 管理，不纳入课题项目清理。
 
-未知项目返回 HTTP 404，空白标识返回 HTTP 422。项目状态为 accepted、resetting、deleting、collecting、running、completed、failed、cancelled、empty。查询结果为空时为 empty、total=0，不创建任务。查询失败为 failed，并返回 error。
+## 创建验证
 
-## 输入与执行
+### 本地数据集
 
-输入适配按业务模块划分：`keti2_sources.py` 查询多个 IP，按代码与形式模型字段收集输入，支持本机文件、路径映射及 HTTP 下载；`keti3_sources.py` 打包下载完整 ZIP，保留全部文件并构建单 IP 输入。项目编排统一调用适配器，不改变现有接口和配置。
+- `GET /task/list_dataset` 返回 `{ips:[{ip_name}],tools:["CBMC","CPAchecker","KLEE"]}`。
+- `POST /task/create_task` 正文 `{ip_name:"AttiCal",tool:"CBMC",userprompt:"可选要求"}`，返回 HTTP 201、`{task_id,status:"queued"}`。tool 必填，userprompt 可省略、为空或 NULL；不接受手动 ID 和文件路径入口。
 
-`source` 仅接受 `keti2`、`keti3`，省略时为 `keti2`，非法值返回 422。来源决定项目查询和文件收集适配器；课题三查询返回标准合成 IP，业务 id 为 `keti3:<projectID>`，验证要求与用户 prompt 合并，课题二提示词保持不变。所有任务准备结束后才串行运行。项目 ID 在两来源间全局唯一，跨来源普通重复提交返回 409，force 可清理后切换来源。运行期进度可返回 source，SQLite 不保存来源，冷启动不推测历史项目来源。
+完整复制 `dataset/16-ip/ip/<ip_name>/` 及共享 `include/`，保存为 `input/ip/<ip_name>/` 和 `input/include/`，保留子目录、相对引用结构及原文件字节。复制完成后才排队执行，拒绝越界名称、符号链接和特殊文件；准备失败清理任务及映射。
 
-默认查询接口为 `http://8.130.30.48:8877/api/search/searchSoftwareIPByProjectId`，projectId 使用字符串查询参数。响应必须为顶层 code=0、result 列表，每项包含 ipId。
+### 远程项目
 
-仅收集以下字段的非空、非“无”文件来源；字段可为字符串或字符串列表：
+- `POST /project/create_project` 正文 `{projectID:"1001",source:"keti2",tool:"CBMC",userprompt:"可选要求",force:false}`，返回 HTTP 202、`{projectID,keti,status:"accepted"}`。source 可省略，默认 keti2，仅支持 keti2/keti3。课题三 projectID 必须是正整数的字符串。
+- `POST /project/delete_project` 正文 `{projectID,source}`，source 必填，成功返回 `{projectID,keti,status:"deleted"}`。
+- `GET /project/get_progress?projectID=...&source=keti2` 返回 `{projectID,keti,status,error?,total,finished,tasks:[{task_id,ip_id,ip_name,status,...}]}`。
+- `GET /project/get_results?projectID=...&source=keti2` 返回 `{projectID,keti,tasks:[{task_id,ip_id,status,files:[{path,size,kind,download_url}]}]}`，只返回 workspace 内 output 目录的产物，不扫描进度接口中的文件。
 
-- `ipMsg.entity.entityImplementation.dotC`、`dotH`
-- `ipMsg.formalModel.stateMachine`、`contracts`、`nonfunctionalConstraint`、`invariant`
+查询 source 必填。重复提交返回 409；force 永久替换同来源项目：停止编排及其验证/聊天，等待输入收集与 Pi 释放，删除旧任务及映射后重新收集。项目删除使用同样清理流程。期间状态为 resetting/deleting，同键重复操作返回 409，其他来源不受影响。请求断开不打断已接受的清理；删除失败保留尚未删除的映射，状态 failed，可再次删除或 force 重试。无对应项目返回 404；空白/非法参数返回 422。课题三参数和配置校验在强制清理之前完成。
 
-字段表示文件来源，不视为正文。优先使用显式路径映射和可读本机文件；不可读时调用课题二 `POST http://8.130.30.48:8877/api/file/downloadFile`，请求头 `Content-Type: application/json`，UTF-8 JSON 正文为 `{ "filePath": "原始文件路径" }`，不拼接路径或改变中文内容。响应文件字节流直接保存到 input；HTTP 下载错误使该任务输入准备失败。HTTP(S) URL 来源仍直接使用 GET 下载。
+后台先准备全部 IP，再逐个验证；单条准备失败不阻止其他 IP。单任务删除取消该任务，不取消整个项目，继续余下任务。进度按任务 verification_status 汇总，普通续聊状态不覆盖验证结论。项目状态支持 accepted、collecting、running、completed、failed、cancelled、empty、resetting、deleting。空项目或尚未形成数据库记录的失败项目只保存在内存，重启后不保留。
 
-每个 IP 对应一个任务，任务 ID 为 MMDD 四位日期加四位小写字母/数字，碰撞时重试。普通任务删除保留已登记的项目任务 ID，人工入口不能复用，以免污染项目归属；强制提交则同时移除这些数据库记录。输入复制到 `tasks/<task_id>/input/`，C/H 保持同目录，保留 basename，重名加编号避免覆盖。`files.csv` 记录 ipId、原始 source、完整 field 和实际绝对 path；每个文件成功保存后追加记录，准备失败时保留已收集文件的清单，不修改原文件。
+全部来源支持 CBMC、CPAchecker、KLEE；远程请求 tool 可省略，默认 CBMC，非法值返回 422。普通提交和 force 均将所选工具传入任务元数据及验证提示词，非法工具在旧任务清理前拒绝。本地/课题二/课题三使用统一提示词构建，简要说明形式模型和代码组织差别、输入路径与 SKILL 产物约定。提示词末尾固定追加 `<userpropmt>\n用户内容\n</userpropmt>`，明确说明有内容则以 userpropmt 为准。默认业务说明不混入用户段。
 
-所有 IP 完成准备后才开始验证。单条输入准备失败标记 failed，其他 IP 继续。项目任务通过 TaskManager 与手动任务共用串行锁；删除单个运行任务不会跳过剩余任务。输入收集属于任务生命周期，删除会先等待收集线程退出，再删除整个目录，避免复制与删除并行。默认提示词要求使用 verify-ip SKILL 和 CBMC，明确 input、files.csv 位置，报告、驱动及配置遵循 SKILL 的目录约定。可选 prompt 作为附加要求。
+## 紧凑列表、详情与删除
 
-## 课题三产物
+`GET /task/list_tasks` 返回所有数据库任务及无数据库记录的旧手动任务目录。可选 `projectID`、`task_id`、`keti=keti2|keti3` 查询参数，精确匹配，多个条件取交集。
 
-课题三接口尚未公开，`server/tmp_keti3.py` 是按同一接口实现的临时后端：直接运行 `python3 server/tmp_keti3.py`（默认 127.0.0.1:50053），它只接受唯一 projectID 并只返回 `tmp/NWM_synthesis.zip`，其余请求返回 404。`KETI3_BASE_URL` 指向该地址即可完整走通课题三流程，接口公开后改为真实服务地址。
+响应为 `{tasks:[{task_id,projectID,keti,ip_id,ip_name,status,chatstatus,created_at?,missing_directory,directory_missing,data_missing}]}`。列表不返回提示词或扫描完整产物；status 为验证状态，chatstatus 为当前对话状态。无历史名称时 ip_name 为空字符串，不猜测补齐。
 
-课题三服务地址在 `server/app/vip_task/config.py` 的 `KETI3_BASE_URL` 中配置，例如 `http://课题三主机:50053`（不要包含 `/api`）。前端选择“课题三”，输入正整数 projectID；非法课题三 ID 返回 422，配置错误返回 400，均在强制清理之前拒绝；API 提交 `{ "projectID": "1001", "source": "keti3" }`。省略 source 仍使用课题二。课题三调用 `POST /api/verify`、正文 `{ "project_id": "1001" }` 打包已存在的最新合成产物，再 GET 返回的 zip_url 下载；不调用 `/api/synthesize`，也不自行拼接远端目录。服务地址未配置、没有产物或打包失败会显示项目错误。
+目录被手动移除时 status=missing、directory_missing/missing_directory=true，仍保留数据库记录；目录存在但元数据缺失、损坏、不可安全读取或 input/workspace/pi_session 目录缺失时 data_missing=true，不能令整个列表失败。NULL 记录保持原值，前端不要据此猜测来源。
 
-每个课题三项目只创建一个自动分配 ID 的任务，业务标识为 `keti3:<projectID>`。原 ZIP 保留为任务根目录 `keti3.zip`，全部文件按原目录结构解压到 input，不按课题二字段筛选，也不转换文件编码；files.csv 记录 ZIP 和每个解压文件的来源及绝对保存路径。拒绝路径穿越、符号链接、特殊文件、重复路径和覆盖已有文件；下载上限 256 MiB，解压上限 1 GiB，条目上限 10000。输入完整准备成功后才启动验证，失败不会启动 Pi。
+`GET /task/get_task?task_id=...` 保留详情、历史提示词与 workspace 文件列表，新任务额外返回 ip_name/tool。`DELETE /task/delete_task?task_id=...` 永久删除目录、会话及数据库记录，返回 `{task_id,status:"deleted"}`；缺目录但数据库仍有记录也可以显式删除。无目录且无映射时返回 404。删除先等待输入收集及验证/聊天退出，避免文件复制与目录删除竞争；损坏元数据不阻止删除。项目清理部分失败时，已成功删除的单任务映射不再保留。
 
-默认提示词将整个产物视为一个特殊 IP：IR 是形式模型，产物最外层的 .c/.h 是主代码，iplib 等子目录为依赖；ZIP 包装目录保留，由 agent 确定实际产物根目录。GBK/gb18030 文件保持原始字节，需要转换时只在 workspace 中复制处理。课题三规范的 `/api/verify` 描述为打包 DIST；如果实际 ZIP 未包含 IR，vip4 无法获取目录外的模型，agent 必须明确报告模型缺失，不得宣称已经证明符合未提供的规约。
+## 下载
 
-## 任务对话
+- `GET /task/get_file?task_id=...&path=...&download=true` 保留 workspace 单文件下载，path 相对 workspace，报告 HTML 预览仍使用沙箱头。
+- `GET /task/download_task?task_id=...` 返回 ZIP 附件，顶层目录为 task_id，完整包含 input、files.csv、pi_session、task.json、workspace 及其他任务文件和空目录。拒绝任何符号链接及特殊文件，读取时使用目录文件描述符及不跟随链接的打开方式，避免泄漏任务之外的文件。压缩失败删除临时 ZIP，响应结束后清理临时文件。运行中的任务下载是即时快照，不保证并发写入内容的一致性。
 
-单个任务对应一个持久 Pi 会话。`POST /task/send_message` 接收 `{task_id,message}`，返回 HTTP 202、`{task_id,status}`；运行中发送的消息作为后续补充排队，轮次结束后继续对话。已结束或暂停的任务重新进入全局串行队列，显式加载本任务的会话文件恢复上下文，不读取其他任务的会话。输入准备期间不接受对话。
+## 课题二输入
 
-`POST /task/pause_task` 接收 `{task_id}`，等待当前输出停止并释放 Pi 资源后返回 `{task_id,status:"paused"}`。排队中的任务也可暂停；暂停不是删除，继续发送消息即可恢复上下文。页面断开或切换任务仅中断订阅，不会暂停后端执行。
+默认查询 `http://8.130.30.48:8877/api/search/searchSoftwareIPByProjectId`，字符串参数 projectId，响应要求 code=0、result 列表，每项有 ipId。
 
-任务 status/chatstatus 表示当前聊天状态，支持 queued、running、paused、idle、completed、failed、cancelled。idle 表示正常对话结束但未新生成报告；completed 表示本轮生成了有效的新验证报告。verification_status 保留最近验证状态，项目进度按该字段汇总，普通聊天不能把已有验证结论改成失败。首次验证没有有效报告仍判定 failed。
+仅收集 `ipMsg.entity.entityImplementation.dotC/dotH` 与 `ipMsg.formalModel.stateMachine/contracts/nonfunctionalConstraint/invariant` 的非空、非“无”文件来源。字段支持字符串或字符串列表，不当作正文。业务 ip_id 取 `ipMsg.entity.basicInformation.id`，名称取 name，仅存任务元数据。
 
-`GET /task/get_events` 重放本任务的完整历史并继续推送当前输出，格式为 NDJSON。用户消息为 `{type:"user",message,turn_id,event_id}`，助手及工具为 `{type:"agent",data,turn_id,event_id}`，状态为 `{type:"status",status,turn_id,event_id}`。event_id 用于去重，turn_id 区分轮次；历史 Pi 会话仍可回放。事件记录和 Pi 上下文都在任务目录中，删除任务会一并删除。
+优先显式路径映射与本机可读文件；HTTP(S) URL 用 GET，不可读的其他路径通过课题二 `POST /api/file/downloadFile` 获取，请求正文 `{filePath:"原始路径"}`，UTF-8 JSON。C/H 保持同目录，basename 重名加编号，files.csv 记录 ipId、原始 source、完整 field 和实际绝对 path；准备失败保留已收集清单。
 
-## 配置
+## 课题三输入
 
-业务服务地址统一在 `server/app/vip_task/config.py` 配置，修改后重启后端生效：
+`server/tmp_keti3.py` 是临时文件服务，只服务唯一 projectID 和 `tmp/NWM_synthesis.zip`。运行 `python3 server/tmp_keti3.py`，默认 127.0.0.1:50053。正式对接时修改业务配置地址。
 
-| 配置项 | 默认值与用途 |
-| --- | --- |
-| `KETI2_SEARCH_URL` | `http://8.130.30.48:8877/api/search/searchSoftwareIPByProjectId`，课题二项目 IP 查询地址 |
-| `KETI2_DOWNLOAD_URL` | `http://8.130.30.48:8877/api/file/downloadFile`，课题二文件 POST 下载地址；空字符串禁用路径下载 |
-| `KETI3_BASE_URL` | `http://127.0.0.1:50053`，课题三服务根地址，不含 `/api`；当前指向临时后端 |
+课题三调用 `POST /api/verify`，正文 `{project_id:"1001"}`，随后 GET 响应 zip_url；不调用 synthesize，不自行拼接远端路径。下载完整 ZIP 保存为任务根目录 keti3.zip，全部产物视为一个 IP，解压到 input 保留路径和原编码，files.csv 记录 ZIP 和所有文件。拒绝路径穿越、符号链接、特殊文件、重复路径与覆盖；下载上限 256 MiB，解压上限 1 GiB，条目上限 10000。
 
-请求地址不再读取环境变量。其余运行配置仍可通过环境变量设置：
+IR 为形式模型，实际产物根层 .c/.h 为主代码，iplib 等子目录是依赖；包装目录由 agent 确定。GBK/gb18030 输入不改写，必要转换只在 workspace 中进行。产物未包含可用 IR 时必须报告规约缺失，不得声称已证明符合未提供的模型。
 
-| 变量 | 默认值与用途 |
-| --- | --- |
-| `VIP_SOURCE_PATH_MAP` | `{}`，JSON 路径前缀到本机目录的映射；优先匹配最长前缀，拒绝越界 |
-| `VIP_SOURCE_TIMEOUT` | `30`，网络请求超时秒数 |
-| `VIP_KETI3_TIMEOUT` | `120`，课题三打包和下载请求超时秒数 |
-| `VIP_PROJECT_DB` | 项目根目录 `projects.sqlite3`，SQLite 文件位置 |
+## 暂停与续聊
 
-例如，`VIP_SOURCE_PATH_MAP='{"/uploads":"/data/uploads"}'` 将远端返回的 `/uploads/ip.c` 映射到 `/data/uploads/ip.c`。如需切换文件服务地址，修改 config.py 的 `KETI2_DOWNLOAD_URL`；服务应接收上述 POST JSON 正文并返回文件字节流。
+`POST /task/send_message` 正文 `{task_id,message}`，返回 HTTP 202、`{task_id,status}`。运行中消息作为后续补充，暂停/结束任务重新排队并加载本任务持久会话恢复上下文，不读取其他会话。输入准备期间拒绝对话。
 
-SQLite 保存 task_id、projectID 和 ip_id。ip_id 只取 `ipMsg.entity.basicInformation.id`（如 `B_TcProcess`），不同于数字 `ipId`，不保存 basicInformation 的 name 或其他字段；项目进度及结果列表均返回该标识，普通任务删除后仍保留归属和标识，项目删除或强制提交会删除旧项目的所有映射。缺失或非字符串 id 记录为空字符串，不影响验证。
+`POST /task/pause_task` 正文 `{task_id}`，等待输出停止并释放 Pi 后返回 `{task_id,status:"paused"}`，排队任务也可以暂停。继续发送消息即可恢复；页面断开仅停止订阅，不暂停执行。
 
-已有数据库启动时自动补充 ip_id 列，历史记录保留；历史任务未保存过该字段，值为空，页面显示“未提供 IP 标识”，不推测或重新查询补齐。数据库不保存项目状态、提示词或输入。新建任务映射写入失败时回滚目录和缓存；若文件回滚也失败，本进程保留临时归属并记录日志，应在重启前通过删除项目或 force 重试清理，临时归属不能替代 SQLite 持久化。重启后可通过映射查询历史任务及结果；TaskManager 将未完成的 created/queued/running 任务落盘为 cancelled，不自动恢复执行。正常关闭时先等待已接受的删除或 force 清理，再取消项目编排及剩余准备任务、释放任务资源并关闭 SQLite；关闭期间不启动新的项目验证。空项目或查询失败且尚未生成映射的项目只在内存中存在，重启后不可查询或保留重复提交限制。
+status/chatstatus 支持 queued、running、paused、idle、completed、failed、cancelled，verification_status 保存验证状态。idle 表示普通对话结束，completed 表示新生成有效报告；首次验证无有效报告判定 failed。
 
-日志包含时间、模块、级别。HTTP 记录方法、路径、状态码和耗时，不记录请求正文、查询参数或提示词；流式接口耗时表示建立响应所需时间。文件来源及编排模块使用独立模块日志。
+`GET /task/get_events?task_id=...` 重放历史并持续推送 NDJSON。用户事件 `{type:"user",message,turn_id,event_id}`，助手/工具事件 `{type:"agent",data,turn_id,event_id}`，状态事件 `{type:"status",status,turn_id,event_id}`；event_id 用于去重，turn_id 区分轮次。
 
-## 测试
+## 配置与测试
 
-在 `server/` 执行 `uv run python -m unittest discover -s tests -v`。项目测试 mock 网络与 Pi，使用临时目录和 SQLite，不调用真实 LLM 或项目服务。
+业务地址在 `server/app/vip_task/config.py` 配置，修改后重启：KETI2_SEARCH_URL、KETI2_DOWNLOAD_URL（空字符串禁用路径下载）、KETI3_BASE_URL（默认 http://127.0.0.1:50053，不含 /api）。地址不读取环境变量。
+
+环境变量：VIP_PROJECT_DB 默认项目根 projects.sqlite3；VIP_SOURCE_PATH_MAP 默认 `{}`，JSON 路径前缀到本机目录映射，最长前缀优先且拒绝越界；VIP_SOURCE_TIMEOUT 默认 30 秒；VIP_KETI3_TIMEOUT 默认 120 秒。
+
+服务重启将未完成任务落盘 cancelled，不自动执行；正常关闭等待清理操作、取消编排与任务、释放 Pi 并关闭 SQLite。写入映射失败回滚目录；回滚也失败时本进程保留临时项目归属供清理重试，应在重启前处理。日志记录流程、状态和 HTTP 方法/路径/耗时，不记录请求正文、查询参数或提示词。
+
+在 `server/` 执行 `uv run python -m unittest discover -s tests -v`。测试使用临时目录、临时 SQLite 和网络/Pi 替身，不操作真实任务或默认数据库，覆盖迁移、来源隔离、ID 碰撞、本地复制、列表缺数据标识、删除续执行、ZIP 安全及暂停续聊。

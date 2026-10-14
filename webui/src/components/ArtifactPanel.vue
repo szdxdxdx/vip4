@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { Artifact } from '../types'
-import { fileUrl } from '../api'
+import { fileUrl, taskZipUrl } from '../api'
 const props = defineProps<{ taskId: string; files: Artifact[]; loading: boolean; error: string; view: 'report' | 'files' }>()
 defineEmits<{ refresh: [] }>()
 const selectedReport = ref('')
@@ -62,6 +62,7 @@ function size(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1024
         </template>
       </template>
       <template v-else>
+        <div class="report-toolbar"><a class="download-link" :href="taskZipUrl(taskId)" download>下载整任务 ZIP</a><span class="muted">包含输入、会话及全部验证产物</span></div>
         <div v-if="!files.length" class="empty small">暂无可下载文件</div>
         <ul v-else class="file-list">
           <li v-for="file in files" :key="file.path">
