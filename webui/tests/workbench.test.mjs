@@ -611,10 +611,10 @@ const { default: ProjectPanel } = await import(pathToFileURL(resolve(out, 'compo
 const projectApi = await import(pathToFileURL(resolve(out, 'projectApi.js')))
 const { ref } = await import('vue')
 const flushProject = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); await nextTick() }
-function mountedProject(onForced) {
+function mountedProject(onChanged) {
   let project
   const active = ref(true)
-  const app = renderer.createApp({ setup() { project = useProject(active, onForced); return () => null } })
+  const app = renderer.createApp({ setup() { project = useProject(active, onChanged); return () => null } })
   app.mount({})
   return { app, p: project, active }
 }
@@ -833,7 +833,7 @@ test('切任务隔离 send/pause 迟到成功与失败，不重连、不清草�
   }
 })
 
-test('删除与 force 后迟到聊天请求不能复活旧 task，草稿缺失任务清理', async () => {
+test('删除与详情列表刷新后迟到聊天请求不能复活旧 task，草稿缺失任务清理', async () => {
   for (const reset of [false, true]) for (const action of ['send', 'pause']) {
     const f = chatFixture(), late = deferred()
     try {
@@ -853,7 +853,7 @@ test('删除与 force 后迟到聊天请求不能复活旧 task，草稿缺失�
   }
 })
 
-test('force 保留仍存在的当前 task 与草稿；无任务、created、空白禁止发送', async () => {
+test('详情列表刷新保留仍存在的当前 task 与草稿；无任务、created、空白禁止发送', async () => {
   const f = chatFixture()
   try {
     assert.equal(f.w.canSend.value, false); await f.w.sendMessage(); await f.w.pauseTask()
@@ -911,7 +911,7 @@ test('实际聊天输入接线：模式/视图/切任务保留隔离草稿，发
   }
 })
 
-test('force 刷新期间迟到旧详情不复活旧文件，删除中发送暂停禁止', async () => {
+test('详情列表刷新期间迟到旧详情不复活旧文件，删除中发送暂停禁止', async () => {
   const f = chatFixture(), lateDetail = deferred(), lateDelete = deferred()
   try {
     await f.select('A'); f.w.draft.value = 'A草稿'
@@ -984,6 +984,27 @@ test('列表查询编码项目及任务 ID，空查询不推断来源', async ()
   assert.equal(urls[1], '/task/list_tasks')
 })
 
+test('projectID 查询保留不同 timestamp 批次和同批多个 IP，不发批次过滤', async () => {
+  const calls = [], tasks = [
+    { task_id: 'a', projectID: 'P', timestamp: '2026-10-14 01:02:03.000001' },
+    { task_id: 'b', projectID: 'P', timestamp: '2026-10-14 01:02:03.000001' },
+    { task_id: 'c', projectID: 'P', timestamp: '2026-10-14 01:02:03.000002' },
+  ]
+  globalThis.fetch = async url => {
+    if (url === '/task/list_dataset') return response({ ips: [], tools: [] })
+    calls.push(url); return response({ tasks })
+  }
+  const { app, p } = mountedProject()
+  try {
+    p.queryID.value = 'P'; await p.refresh()
+    assert.deepEqual(p.tasks.value, tasks)
+    assert.equal(calls.length, 1)
+    const query = new URL(calls[0], 'http://local').searchParams
+    assert.equal(query.get('projectID'), 'P')
+    assert.equal(query.has('timestamp'), false)
+  } finally { app.unmount() }
+})
+
 test('local 自动任务 ID，三工具与空提示词；换类别/IP 不写入模板', async () => {
   const clock = projectClock(), calls = []
   let changes = 0
@@ -1009,36 +1030,39 @@ test('local 自动任务 ID，三工具与空提示词；换类别/IP 不写入�
   } finally { app.unmount(); clock.restore() }
 })
 
-test('远程 force/删除限定来源和 projectID，取消不请求，忙时禁止重复', async () => {
-  const clock = projectClock(), calls = [], pending = deferred(), confirmations = []
-  let accepted = false, changes = 0
-  globalThis.window = { confirm: text => { confirmations.push(text); return accepted } }
+test('同项目重复提交无确认无删除，忙时防重，后端生成批次时间戳', async () => {
+  const clock = projectClock(), calls = [], pending = deferred()
+  let changes = 0
+  globalThis.window = { confirm: () => assert.fail('重复提交不应确认') }
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url, options })
     if (url === '/task/list_dataset') return response({ ips: [], tools: [] })
-    if (url === '/project/create_project') return pending.promise
-    if (url === '/project/delete_project') return response({ status: 'deleted' })
-    return response({ tasks: [] })
+    if (url === '/project/create_project') return calls.filter(c => c.url === url).length === 1
+      ? pending.promise : response({ projectID: '123', keti: 'keti3', timestamp: '2026-10-14 01:02:03.000002', status: 'accepted' })
+    assert.fail(`意外请求：${url}`)
   }
   const { app, p } = mountedProject(() => changes++)
   try {
     await flushProject()
     p.source.value = 'keti3'; p.projectID.value = '123'; p.prompt.value = '用户要求'; p.tool.value = 'KLEE'
-    await p.forceSubmit()
-    assert.equal(calls.some(c => c.url === '/project/create_project'), false)
-    accepted = true
-    const creating = p.forceSubmit()
-    await p.forceSubmit()
+    const creating = p.submit()
+    await p.submit()
     assert.equal(calls.filter(c => c.url === '/project/create_project').length, 1)
-    p.source.value = 'keti2'
-    pending.resolve(response({ status: 'accepted' })); await creating
-    const created = JSON.parse(calls.find(c => c.url === '/project/create_project').options.body)
-    assert.deepEqual(created, { projectID: '123', source: 'keti3', force: true, userprompt: '用户要求', tool: 'KLEE' })
-    await p.removeProject()
-    assert.deepEqual(JSON.parse(calls.find(c => c.url === '/project/delete_project').options.body), { projectID: '123', source: 'keti2' })
-    assert.match(confirmations[0], /keti3 \/ 123/)
+    pending.resolve(response({ projectID: '123', keti: 'keti3', timestamp: '2026-10-14 01:02:03.000001', status: 'accepted' }))
+    await creating
+    await p.submit()
+    const submissions = calls.filter(c => c.url === '/project/create_project')
+    assert.equal(submissions.length, 2)
+    for (const call of submissions) assert.deepEqual(JSON.parse(call.options.body), {
+      projectID: '123', source: 'keti3', userprompt: '用户要求', tool: 'KLEE',
+    })
     assert.equal(changes, 2)
-    assert.equal(calls.some(c => c.url.startsWith('/task/list_tasks')), false)
+    assert.equal(p.projectID.value, '123')
+    assert.equal(p.prompt.value, '用户要求')
+    assert.equal(calls.some(c => /delete|list_tasks/.test(c.url)), false)
+    assert.equal('forceSubmit' in p, false)
+    assert.equal('removeProject' in p, false)
+    assert.equal('deleteProject' in projectApi, false)
   } finally { app.unmount(); clock.restore() }
 })
 
@@ -1081,8 +1105,8 @@ test('实际统一提交组件：点击才填模板、缺目录提示、NULL 项
   globalThis.fetch = async url => url === '/task/list_dataset'
     ? response({ ips: [{ ip_name: 'AttiCal' }], tools: ['CBMC', 'CPAchecker', 'KLEE'] })
     : response({ tasks: [
-      { task_id: 'local01', projectID: null, keti: null, ip_name: 'AttiCal', status: 'completed' },
-      { task_id: 'missing1', projectID: '123', keti: 'keti2', ip_name: 'IP', status: 'missing', missing_directory: true },
+      { task_id: 'local01', timestamp: null, projectID: null, keti: null, ip_name: 'AttiCal', status: 'completed' },
+      { task_id: 'missing1', timestamp: '2026-10-14 00:00:00', projectID: '123', keti: 'keti2', ip_name: 'IP', status: 'missing', missing_directory: true },
     ] })
   const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: true, onViewTask: id => viewed.push(id) }) } })
   const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
@@ -1096,6 +1120,7 @@ test('实际统一提交组件：点击才填模板、缺目录提示、NULL 项
     for (const source of ['local', 'keti2', 'keti3', 'local']) {
       nodes().find(n => n.props?.id === 'project-source').props['onUpdate:modelValue'](source); await nextTick()
       assert.ok(nodes().some(n => n.props?.id === 'verify-tool'))
+      assert.ok(!nodes().some(n => n.tag === 'button' && /强制提交|删除项目/.test(n.text || '')))
       assert.ok(!nodes().some(n => /默认使用 CBMC；|无需项目 ID，任务 ID 自动生成/.test(n.text || '')))
     }
     const ip = nodes().find(n => n.props?.id === 'dataset-ip')
@@ -1106,6 +1131,8 @@ test('实际统一提交组件：点击才填模板、缺目录提示、NULL 项
     assert.match(prompt.value, /<input>\/ = \/app\/vip4\/tasks\/<task_id>\/input\//)
     assert.doesNotMatch(prompt.value, /dataset/)
     assert.ok(nodes().some(n => n.tag === 'td' && descendants(n).some(child => child.text === '—')))
+    assert.ok(nodes().some(n => n.tag === 'th' && n.text === 'timestamp（UTC）'))
+    assert.ok(nodes().some(n => n.tag === 'td' && n.text === '2026-10-14 00:00:00'))
     assert.ok(nodes().some(n => n.tag === 'td' && n.text === '实际目录已删除'))
     assert.equal(nodes().filter(n => n.props?.class === 'source-tag').length, 1)
     const buttons = nodes().filter(n => n.tag === 'button' && n.text === '查看详情')
@@ -1118,6 +1145,8 @@ test('实际统一提交组件：点击才填模板、缺目录提示、NULL 项
 test('旧创建 UI 已移除，详情仅保留视图，整任务 ZIP 与单文件下载并存', async () => {
   const app = await readFile(resolve(root, 'src/App.vue'), 'utf8')
   const artifacts = await readFile(resolve(root, 'src/components/ArtifactPanel.vue'), 'utf8')
+  assert.match(app, /@changed="resetHistory"/)
+  assert.doesNotMatch(app, /@forced/)
   assert.match(app, /ref<'single' \| 'project'>\('project'\)/)
   assert.doesNotMatch(app, /TaskComposer|createError|creating|@submit="submit"/)
   await assert.rejects(readFile(resolve(root, 'src/components/TaskComposer.vue')), { code: 'ENOENT' })
@@ -1153,7 +1182,7 @@ test('远程普通提交传工具，初始默认为 CBMC', async () => {
       p.source.value = source; p.projectID.value = '123'
       for (const tool of ['CBMC', 'CPAchecker', 'KLEE']) {
         p.tool.value = tool; await p.submit()
-        assert.deepEqual(calls.at(-1), { projectID: '123', source, force: false, userprompt: '', tool })
+        assert.deepEqual(calls.at(-1), { projectID: '123', source, userprompt: '', tool })
       }
     }
   } finally { app.unmount() }

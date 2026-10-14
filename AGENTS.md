@@ -30,7 +30,7 @@ AI Agent 依照 SKILL 的指导，调用 MCP 提供的工具，完成软件 IP �
   - project：负责项目验证编排，先收集全部 IP 输入，再通过任务管理器依次执行
   - keti2_sources：负责课题二项目查询及本机、HTTP 文件获取，课题二路径通过 POST 下载接口获取
   - keti3_sources：按 projectID 打包并下载课题三全部产物，安全解压、保留目录及原始编码；整个产物作为单 IP，IR 为形式模型，根层 .c/.h 为主代码
-- ProjectStore：SQLite 保存 task_id、projectID、keti 及实体模型基本信息的 id（ip_id）；本地任务 projectID、keti 为 NULL，历史 keti 保持 NULL；名称保存在任务元数据，项目进度由元数据汇总
+- ProjectStore：SQLite 保存 task_id、projectID、keti、timestamp 及实体模型基本信息的 id（ip_id）；本地任务 projectID、keti 为 NULL，历史 keti 保持 NULL；名称保存在任务元数据，项目进度由元数据汇总
 - service：主要负责对外提供服务接口
   - api：主要负责对外提供 HTTP 接口
 - tmp_keti3.py：课题三接口未公开时的临时后端，模拟打包与下载接口，只服务 tmp/NWM_synthesis.zip 与唯一 projectID
@@ -103,9 +103,9 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 ## 本地数据集、keti2 和 keti3 的差别：
 
 【需留意】本地数据集、keti2 和 keti3 都包含形式模型和代码实现，但是形式模型的格式、代码的目录结构都不一样
-【已实现】keti2 和 keti3 请求的 projectID 可以相同，查询、删除和强制提交按 keti + projectID 区分，互不影响
+【已实现】keti2 和 keti3 请求的 projectID 可以相同；同来源同 projectID 可重复提交，不覆盖历史任务。后端为每次提交生成时间戳，同批多个 IP 共用，查询返回各时间戳的任务；删除仅按 taskID，不提供强制提交或项目整体删除
 【需留意】目前的 IP 验证 skill 专门针对本地数据集的形式模型进行开发，对 keti2 和 keti3 的需要 LLM 自身能力进行适配
-【已实现】keti3 作为单 IP 通过统一项目流程执行，输入适配和默认说明按来源区分；全部来源可选 CBMC、CPAchecker、KLEE，默认 CBMC；普通和强制提交均按所选工具配置任务提示词并执行
+【已实现】keti3 作为单 IP 通过统一项目流程执行，输入适配和默认说明按来源区分；全部来源可选 CBMC、CPAchecker、KLEE，默认 CBMC；提交按所选工具配置任务提示词并执行
 【已实现】默认提示词简要说明各来源的形式模型与代码组织差异
 【已实现】可选用户提示词具有最高优先级，在 pi 提示词末尾以 `<userpropmt>` 包裹；默认业务说明不混入用户段
 【已实现】对 pi 说明：如果 userpropmt 中有内容，则以 userpropmt 为准
@@ -113,10 +113,10 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 
 ## 本地存储
 
-【已实现】SQLite 保存任务 ID、projectID、keti、IP ID；本地任务 projectID 和 keti 都为 NULL，旧记录 keti 保持 NULL，任务进度由元数据汇总。任务 ID 碰撞时重新生成，包括插入数据库发现重复的情况
+【已实现】SQLite 保存任务 ID、projectID、keti、时间戳、IP ID；本地任务 projectID 和 keti 都为 NULL，旧记录 keti 保持 NULL，任务进度由元数据汇总。任务 ID 碰撞时重新生成，包括插入数据库发现重复的情况
 【已实现】SQLite 中的内容与 `/app/vip4/tasks/<task_id>` 目录中的内容一一对应，删除任务时同时删除 SQLite 中的记录
 【已实现】手动删除目录后保留 SQLite 记录，列表提示实际目录已删除；部分任务数据缺失时提示数据缺失，可按 taskID 显式删除记录
-【已实现】SQLite 以 keti 区分同名项目，taskID 是唯一标识；NULL 来源历史任务通过 taskID 查询和删除
+【已实现】SQLite 以 taskID 为唯一标识，keti、projectID、时间戳描述任务归属；已有数据时间戳统一为 2026-10-14 00:00:00，新提交由后端生成 UTC 时间戳，所有任务均可按 taskID 查询和删除
 
 ## 前端交互：单个 IP 的验证详情
 
@@ -134,7 +134,7 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 
 【已实现】项目验证右栏展示全部验证任务，包括本地及历史任务
 【已实现】可按 projectID 或 taskID 查询验证任务列表
-【已实现】列表紧凑排列，每行展示 projectID、taskID、IP 名字、验证情况和详情入口；无 projectID 显示横线
+【已实现】列表紧凑排列，每行展示 projectID、taskID、时间戳、IP 名字、验证情况和详情入口；无 projectID 显示横线
 
 ## 前端交互：提交验证任务
 

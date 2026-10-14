@@ -38,44 +38,44 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.patch.stop()
         self.temp.cleanup()
 
-    async def test_source_isolation_force_delete_and_historical_null(self):
+    async def test_source_isolation_repeat_and_task_delete_and_historical_null(self):
         historic = create_registered(self.tasks, self.store, '历史', 'CBMC', None, project_id='1001')['task_id']
-        k2 = self.manager._create(('keti2', '1001'), '用户', 'id2', '名称2')
-        k3 = self.manager._create(('keti3', '1001'), '用户', 'id3', '名称3')
+        k2 = self.manager._create(('keti2', '1001', '2026-10-14 00:00:00'), '用户', 'id2', '名称2')
+        k3 = self.manager._create(('keti3', '1001', '2026-10-14 00:00:00'), '用户', 'id3', '名称3')
         self.assertEqual(self.manager.progress('1001', source='keti2')['total'], 1)
         self.assertEqual(self.manager.progress('1001', source='keti3')['tasks'][0]['ip_name'], '名称3')
-        await self.manager.submit('1001', source='keti2', force=True)
-        await self.manager.jobs[('keti2', '1001')]
-        self.assertFalse(self.store.has_task(k2))
+        await self.manager.submit('1001', source='keti2')
+        await self.manager.jobs[batch_key(self.manager, 'keti2', '1001')]
+        self.assertTrue(self.store.has_task(k2))
         self.assertTrue(self.store.has_task(k3))
         self.assertTrue(self.store.has_task(historic))
-        await self.manager.delete('1001', source='keti3')
+        await self.tasks.delete_task(k3)
         self.assertTrue(self.store.has_task(historic))
         with self.assertRaises(ProjectNotFoundError):
             self.manager.progress('1001', source='keti3')
         await self.tasks.delete_task(historic)
         self.assertFalse(self.store.has_task(historic))
 
-    async def test_remote_tools_reach_execution_and_force_preserves_selection(self):
+    async def test_remote_tools_reach_execution_and_repeat_preserves_selection(self):
         self.sources.search.return_value = [{'ipId': 'one'}]
         seen = []
         async def run(task):
             metadata = Task._metadata(task.task_dir)
             tool = metadata['tool']
-            self.assertIn(f'使用 {tool} 验证软件 IP', task.prompt)
+            self.assertIn(f'使用的验证工具：{tool}', task.prompt)
             seen.append(tool)
             metadata.update(status='completed', verification_status='completed')
             _write_metadata(task.task_dir / 'task.json', metadata)
         with patch.object(Task, 'run', run):
             for source in ('keti2', 'keti3'):
                 for tool in ('CBMC', 'CPAchecker', 'KLEE'):
-                    await self.manager.submit('123', source=source, tool=tool, force=True)
-                    await self.manager.jobs[(source, '123')]
+                    await self.manager.submit('123', source=source, tool=tool)
+                    await self.manager.jobs[batch_key(self.manager, source, '123')]
                     self.assertEqual(self.manager.progress('123', source=source)['status'], 'completed')
         self.assertEqual(seen, ['CBMC', 'CPAchecker', 'KLEE'] * 2)
         old = self.store.tasks('123', 'keti2')
         with self.assertRaises(ValueError):
-            await self.manager.submit('123', source='keti2', tool='bad', force=True)
+            await self.manager.submit('123', source='keti2', tool='bad')
         self.assertEqual(self.store.tasks('123', 'keti2'), old)
 
     async def test_prompt_user_segment_and_names_only_in_metadata(self):
@@ -83,11 +83,13 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             result = create_registered(self.tasks, self.store, '名字', 'CPAchecker', '指定要求', keti=source)
             task = self.tasks.tasks[result['task_id']]
             before, user = task.prompt.split('<userpropmt>')
-            self.assertIn('以 userpropmt 为准', before)
-            self.assertEqual(user, '\n指定要求\n</userpropmt>')
+            self.assertIn('若用户补充说明与默认说明有冲突，必须以用户的为准', before)
+            self.assertEqual(user, '\n指定要求\n</userpropmt>\n')
             self.assertEqual(Task._metadata(task.task_dir)['ip_name'], '名字')
+            self.assertEqual(Task._metadata(task.task_dir)['timestamp'], result['timestamp'])
+            self.assertEqual(next(entry for entry in self.store.all_entries() if entry['task_id'] == result['task_id'])['timestamp'], result['timestamp'])
         self.assertEqual({r[1] for r in self.store.db.execute('PRAGMA table_info(project_tasks)')},
-                         {'task_id', 'projectID', 'keti', 'ip_id'})
+                         {'task_id', 'projectID', 'keti', 'ip_id', 'timestamp'})
 
     async def test_task_id_placeholder_uses_final_id_after_collision(self):
         date = __import__('datetime').datetime.now().strftime('%m%d')
@@ -102,7 +104,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('<task_id>', actual)
             self.assertIn(f'/app/vip4/tasks/{task_id}/input/ip/AttiCal', actual)
             self.assertIn(f'/app/vip4/tasks/{task_id}/workspace/cbmc_suite/output', actual)
-            self.assertTrue(actual.endswith('<userpropmt>\n' + prompt.replace('<task_id>', task_id) + '\n</userpropmt>'))
+            self.assertTrue(actual.endswith('<userpropmt>\n' + prompt.replace('<task_id>', task_id) + '\n</userpropmt>\n'))
 
     async def test_null_ip_information_does_not_skip_valid_items(self):
         values = [None, {}, {'entity': None}, {'entity': {}},
@@ -117,7 +119,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             task.set_status('completed')
         with patch.object(Task, 'run', run):
             await self.manager.submit('null-info')
-            await self.manager.jobs[('keti2', 'null-info')]
+            await self.manager.jobs[batch_key(self.manager, 'keti2', 'null-info')]
         self.assertEqual(self.sources.collect.call_count, len(items))
         progress = self.manager.progress('null-info', source='keti2')
         self.assertEqual(progress['status'], 'completed')
@@ -126,7 +128,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([task['ip_id'] for task in progress['tasks']], [''] * 7 + ['only-id', ''])
 
     async def test_zip_stream_supports_zip64_without_known_size(self):
-        task_id = self.manager._create(('keti2', 'zip64'), None, 'id')
+        task_id = self.manager._create(('keti2', 'zip64', '2026-10-14 00:00:00'), None, 'id')
         contents = b'large-file' * 100
         (config.VIP_TASK_DIR / task_id / 'workspace/large.bin').write_bytes(contents)
         # 降低阈值模拟超过 2 GiB 的文件，不创建实际大文件。
@@ -140,9 +142,9 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             archive.unlink()
 
     async def test_list_missing_and_legacy_directory_filters(self):
-        deleted = self.manager._create(('keti2', 'p'), None, 'id', '名称')
+        deleted = self.manager._create(('keti2', 'p', '2026-10-14 00:00:00'), None, 'id', '名称')
         self.tasks.tasks[deleted].delete_files()
-        broken = self.manager._create(('keti3', 'p'), None, 'id', '名称')
+        broken = self.manager._create(('keti3', 'p', '2026-10-14 00:00:00'), None, 'id', '名称')
         (config.VIP_TASK_DIR / broken / 'task.json').unlink()
         self.tasks.create_task('legacy', '历史手动', start=False)
         rows = {r['task_id']: r for r in self.tasks.list_tasks()['tasks']}
@@ -192,7 +194,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.store.add(date + 'aaaa', None, '')
         self.tasks.create_task(date + 'bbbb', '手动', start=False)
         with patch('app.vip_task.inputs.secrets.choice', side_effect=list('aaaabbbbcccc')):
-            task_id = self.manager._create(('keti2', 'p'), None, 'id')
+            task_id = self.manager._create(('keti2', 'p', '2026-10-14 00:00:00'), None, 'id')
         self.assertEqual(task_id, date + 'cccc')
         add = self.store.add
         def racing(task_id, *args):
@@ -201,12 +203,12 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
                 raise sqlite3.IntegrityError('UNIQUE constraint failed')
             return add(task_id, *args)
         with patch.object(self.store, 'add', racing), patch('app.vip_task.inputs.secrets.choice', side_effect=list('ddddeeee')):
-            task_id = self.manager._create(('keti2', 'p'), None, 'id')
+            task_id = self.manager._create(('keti2', 'p', '2026-10-14 00:00:00'), None, 'id')
         self.assertEqual(task_id, date + 'eeee')
         self.assertFalse((config.VIP_TASK_DIR / (date + 'dddd')).exists())
 
     async def test_zip_complete_and_reject_unsafe_files(self):
-        task_id = self.manager._create(('keti2', 'p'), None, 'id')
+        task_id = self.manager._create(('keti2', 'p', '2026-10-14 00:00:00'), None, 'id')
         directory = config.VIP_TASK_DIR / task_id
         for name in ('input/a.c', 'pi_session/context.json', 'workspace/result.txt', 'files.csv'):
             (directory / name).write_bytes(name.encode())
@@ -248,6 +250,29 @@ class MigrationTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_timestamp_migration_only_when_missing_and_preserves_new_records(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'migration.sqlite3'
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE project_tasks (task_id TEXT PRIMARY KEY, projectID TEXT, ip_id TEXT, keti TEXT)")
+                db.executemany('INSERT INTO project_tasks VALUES (?, ?, ?, ?)',
+                               [('historic', 'same', 'ip', 'keti2'), ('local', None, '', None)])
+            store = ProjectStore(path)
+            self.assertEqual({entry['timestamp'] for entry in store.all_entries()}, {'2026-10-14 00:00:00'})
+            store.add('new', 'same', 'ip', 'keti2', '2026-10-14 12:34:56.123456')
+            store.close()
+            store = ProjectStore(path)
+            self.assertEqual({entry['task_id']: entry['timestamp'] for entry in store.all_entries()},
+                             {'historic': '2026-10-14 00:00:00', 'local': '2026-10-14 00:00:00',
+                              'new': '2026-10-14 12:34:56.123456'})
+            store.close()
+            # 字段已经存在时不补写 NULL，也不覆盖任何新记录。
+            with sqlite3.connect(path) as db:
+                db.execute("UPDATE project_tasks SET timestamp=NULL WHERE task_id='historic'")
+            store = ProjectStore(path)
+            self.assertIsNone(next(entry for entry in store.all_entries() if entry['task_id'] == 'historic')['timestamp'])
+            store.close()
+
     def test_local_api_and_zip_download(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -269,5 +294,9 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(downloaded.status_code, 200)
                 self.assertIn('attachment', downloaded.headers['content-disposition'])
                 self.assertEqual(client.get('/project/get_progress', params={'projectID': 'p'}).status_code, 422)
-                self.assertEqual(client.post('/project/delete_project', json={'projectID': 'p'}).status_code, 422)
+                self.assertEqual(client.post('/project/delete_project', json={'projectID': 'p'}).status_code, 404)
                 self.assertEqual(client.post('/task/create_task', json={'ip_name': 'Demo', 'tool': 'invalid'}).status_code, 422)
+
+
+def batch_key(manager, source, project_id):
+    return next(key for key in reversed(manager.jobs) if key[:2] == (source, project_id))

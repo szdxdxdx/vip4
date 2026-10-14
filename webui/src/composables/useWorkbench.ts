@@ -207,7 +207,7 @@ export function useWorkbench() {
     finally { if (current()) chatBusy.value = '' }
   }
   async function resetHistory() {
-    // 强制重建成功后作废旧请求，以新列表判定选择是否仍存在。
+    // 提交成功后刷新详情任务列表，保留仍存在的选择与草稿。
     const previous = selectedId.value
     chatBusy.value = ''
     chatError.value = ''

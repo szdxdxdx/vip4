@@ -239,7 +239,7 @@ class TaskManager:
         if root.is_dir():
             for directory in root.iterdir():
                 if re.fullmatch(TASK_ID_PATTERN, directory.name) and len(directory.name) <= 64 and directory.is_dir():
-                    entries.setdefault(directory.name, {'task_id': directory.name, 'projectID': None, 'keti': None, 'ip_id': ''})
+                    entries.setdefault(directory.name, {'task_id': directory.name, 'projectID': None, 'keti': None, 'ip_id': '', 'timestamp': None})
         tasks = []
         for entry in entries.values():
             if (projectID is not None and entry['projectID'] != projectID or
@@ -253,6 +253,8 @@ class TaskManager:
             try:
                 metadata = Task._metadata(Task._task_dir(entry['task_id']))
                 row.update({key: metadata[key] for key in ('ip_name', 'created_at', 'chatstatus') if key in metadata})
+                if row['timestamp'] is None:
+                    row['timestamp'] = metadata.get('timestamp')
                 row['status'] = metadata.get('verification_status', metadata['status'])
                 row['data_missing'] = any(not (directory / name).is_dir() or (directory / name).is_symlink()
                                           for name in ('input', 'workspace', 'pi_session'))

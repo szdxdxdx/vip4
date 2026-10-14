@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { createTask, listDataset, listTasks } from '../api'
-import { createProject, deleteProject } from '../projectApi'
+import { createProject } from '../projectApi'
 import type { ProjectSource } from '../projectTypes'
 import type { Task } from '../types'
 
@@ -37,7 +37,7 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
       }
     }
   }
-  async function act(action: 'create' | 'force' | 'delete') {
+  async function submit() {
     if (busy.value || !active.value) return
     const selectedSource = source.value, id = projectID.value.trim()
     error.value = ''
@@ -45,16 +45,10 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
       error.value = selectedSource === 'local' ? '请选择数据集 IP' : '请输入项目 ID'
       return
     }
-    if (action !== 'create') {
-      if (selectedSource === 'local') return
-      const verb = action === 'force' ? '强制提交' : '删除'
-      if (!window.confirm(`${verb}「${selectedSource} / ${id}」？将停止验证并永久删除该来源、该项目的全部任务文件；其他来源不受影响，不可恢复。`)) return
-    }
     busy.value = true
     try {
       if (selectedSource === 'local') await createTask(ip.value, tool.value, prompt.value, mutationController.signal)
-      else if (action === 'delete') await deleteProject(id, selectedSource, mutationController.signal)
-      else await createProject(id, prompt.value, mutationController.signal, action === 'force', selectedSource, tool.value)
+      else await createProject(id, prompt.value, mutationController.signal, selectedSource, tool.value)
       if (disposed) return
       onChanged()
     } catch (cause) {
@@ -69,5 +63,5 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
   watch(active, enabled => { if (!enabled) cancelList() }, { flush: 'sync' })
   onBeforeUnmount(() => { disposed = true; cancelList(); datasetController.abort(); mutationController.abort() })
   return { source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, error, busy,
-    listError, loading, refresh, submit: () => act('create'), forceSubmit: () => act('force'), removeProject: () => act('delete') }
+    listError, loading, refresh, submit }
 }

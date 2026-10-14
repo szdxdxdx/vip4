@@ -4,41 +4,42 @@
 
 在 `server/` 执行 `uv run main.py --backend-only`，不加该参数则同时提供编译后的前端。使用单进程部署：验证和续聊共用串行资源锁，所有 HTTP 路径无 `/api` 前缀。
 
-任务目录为 `tasks/<task_id>/`，包含只读 `input/`、来源清单 `files.csv`、`task.json`、Pi 会话 `pi_session/` 和工作目录 `workspace/`。ID 自动分配为 MMDD 加四位随机字母/数字，目录、缓存或数据库碰撞均重新生成，不覆盖旧任务。SQLite `project_tasks` 只保存 `task_id`、`projectID`、`ip_id` 和 `keti`；IP 名称和工具写入任务元数据，不放入数据库。
+任务目录为 `tasks/<task_id>/`，包含只读 `input/`、来源清单 `files.csv`、`task.json`、Pi 会话 `pi_session/` 和工作目录 `workspace/`。ID 自动分配为 MMDD 加四位随机字母/数字，目录、缓存或数据库碰撞均重新生成，不覆盖旧任务。SQLite `project_tasks` 只保存 `task_id`、`projectID`、`ip_id`、`keti` 和 `timestamp`；IP 名称和工具写入任务元数据，不放入数据库。
 
-`keti` 为 keti2、keti3 或 NULL；本地任务的 keti 和 projectID 均为 NULL。项目查询、删除和 force 以 `(keti, projectID)` 隔离，相同项目ID可以同时用于课题二和课题三。旧数据库启动时迁移为允许 projectID=NULL 的结构，补充 keti 列，历史值保持 NULL，绝不推断归类。历史归属只能通过 task_id 管理，不纳入课题项目清理。
+`keti` 为 keti2、keti3 或 NULL；本地任务的 keti 和 projectID 均为 NULL。同 `(keti, projectID)` 可重复提交，每次保留独立批次。后端以 UTC 生成 `YYYY-MM-DD HH:mm:ss.ffffff` 格式 timestamp，单进程内严格递增，同批多 IP 共用；新本地任务也生成 timestamp，写入数据库和 task.json。查询以 `(keti, projectID)` 区分来源，删除仅以 task_id 为唯一标识。
+
+旧数据库启动时迁移为允许 projectID=NULL 的结构，缺失来源保持 NULL，不推断归类。仅在 timestamp 字段缺失时将已有记录补为固定 `2026-10-14 00:00:00`；字段存在后不回填或覆盖任何值。无数据库记录的历史手工目录列表 timestamp 为 NULL。
 
 ## 创建验证
 
 ### 本地数据集
 
 - `GET /task/list_dataset` 返回 `{ips:[{ip_name}],tools:["CBMC","CPAchecker","KLEE"]}`。
-- `POST /task/create_task` 正文 `{ip_name:"AttiCal",tool:"CBMC",userprompt:"可选要求"}`，返回 HTTP 201、`{task_id,status:"queued"}`。tool 必填，userprompt 可省略、为空或 NULL；不接受手动 ID 和文件路径入口。
+- `POST /task/create_task` 正文 `{ip_name:"AttiCal",tool:"CBMC",userprompt:"可选要求"}`，返回 HTTP 201、`{task_id,timestamp,status:"queued"}`。tool 必填，userprompt 可省略、为空或 NULL；不接受手动 ID 和文件路径入口。
 
 完整复制 `dataset/16-ip/ip/<ip_name>/` 及共享 `include/`，保存为 `input/ip/<ip_name>/` 和 `input/include/`，保留子目录、相对引用结构及原文件字节。复制完成后才排队执行，拒绝越界名称、符号链接和特殊文件；准备失败清理任务及映射。
 
 ### 远程项目
 
-- `POST /project/create_project` 正文 `{projectID:"1001",source:"keti2",tool:"CBMC",userprompt:"可选要求",force:false}`，返回 HTTP 202、`{projectID,keti,status:"accepted"}`。source 可省略，默认 keti2，仅支持 keti2/keti3。课题三 projectID 必须是正整数的字符串。
-- `POST /project/delete_project` 正文 `{projectID,source}`，source 必填，成功返回 `{projectID,keti,status:"deleted"}`。
-- `GET /project/get_progress?projectID=...&source=keti2` 返回 `{projectID,keti,status,error?,total,finished,tasks:[{task_id,ip_id,ip_name,status,...}]}`。
-- `GET /project/get_results?projectID=...&source=keti2` 返回 `{projectID,keti,tasks:[{task_id,ip_id,status,files:[{path,size,kind,download_url}]}]}`，只返回 workspace 内 output 目录的产物，不扫描进度接口中的文件。
+- `POST /project/create_project` 正文 `{projectID:"1001",source:"keti2",tool:"CBMC",userprompt:"可选要求"}`，返回 HTTP 202、`{projectID,keti,timestamp,status:"accepted"}`。source 可省略，默认 keti2，仅支持 keti2/keti3。课题三 projectID 必须是正整数的字符串。
+- `GET /project/get_progress?projectID=...&source=keti2` 返回 `{projectID,keti,status,error?,total,finished,tasks:[{task_id,timestamp,ip_id,ip_name,status,...}],batches:[{timestamp,status,error?,total,finished,tasks}]}`。
+- `GET /project/get_results?projectID=...&source=keti2` 返回 `{projectID,keti,tasks:[{task_id,timestamp,ip_id,status,files:[{path,size,kind,download_url}]}],batches:[{timestamp,tasks}]}`，只返回 workspace 内 output 目录的产物，不扫描进度接口中的文件。
 
-查询 source 必填。重复提交返回 409；force 永久替换同来源项目：停止编排及其验证/聊天，等待输入收集与 Pi 释放，删除旧任务及映射后重新收集。项目删除使用同样清理流程。期间状态为 resetting/deleting，同键重复操作返回 409，其他来源不受影响。请求断开不打断已接受的清理；删除失败保留尚未删除的映射，状态 failed，可再次删除或 force 重试。无对应项目返回 404；空白/非法参数返回 422。课题三参数和配置校验在强制清理之前完成。
+查询 source 必填，返回该来源同项目所有批次。扁平 tasks 与总计数包含所有批次，batches 按 timestamp 升序排列；进度顶层 status/error 为最新批次状态，每批状态单独返回。重复提交不覆盖或删除任何旧任务，无项目删除入口。无对应项目返回 404，空白/非法参数返回 422。
 
-后台先准备全部 IP，再逐个验证；单条准备失败不阻止其他 IP。单任务删除取消该任务，不取消整个项目，继续余下任务。进度按任务 verification_status 汇总，普通续聊状态不覆盖验证结论。项目状态支持 accepted、collecting、running、completed、failed、cancelled、empty、resetting、deleting。空项目或尚未形成数据库记录的失败项目只保存在内存，重启后不保留。
+后台先准备全部 IP，再逐个验证；单条准备失败不阻止其他 IP。单任务删除取消该任务，不取消整个项目，继续余下任务。进度按任务 verification_status 汇总，普通续聊状态不覆盖验证结论。项目状态支持 accepted、collecting、running、completed、failed、cancelled、empty。空项目或尚未形成数据库记录的失败项目只保存在内存，重启后不保留。
 
-全部来源支持 CBMC、CPAchecker、KLEE；远程请求 tool 可省略，默认 CBMC，非法值返回 422。普通提交和 force 均将所选工具传入任务元数据及验证提示词，非法工具在旧任务清理前拒绝。本地/课题二/课题三使用统一提示词构建，简要说明形式模型和代码组织差别、输入路径与 SKILL 产物约定。提示词末尾固定追加 `<userpropmt>\n用户内容\n</userpropmt>`，明确说明有内容则以 userpropmt 为准。默认业务说明不混入用户段。
+全部来源支持 CBMC、CPAchecker、KLEE；远程请求 tool 可省略，默认 CBMC，非法值返回 422。每次提交均将所选工具传入任务元数据及验证提示词。本地/课题二/课题三使用统一提示词构建，明确工具、输入、工作目录与完成报告要求；远程来源要求适配实际形式模型。可选用户提示词末尾以 `<userpropmt>\n用户内容\n</userpropmt>` 包裹；与默认说明冲突时以用户要求为准，不冲突时同时遵循。默认业务说明不混入用户段。
 
 ## 紧凑列表、详情与删除
 
 `GET /task/list_tasks` 返回所有数据库任务及无数据库记录的旧手动任务目录。可选 `projectID`、`task_id`、`keti=keti2|keti3` 查询参数，精确匹配，多个条件取交集。
 
-响应为 `{tasks:[{task_id,projectID,keti,ip_id,ip_name,status,chatstatus,created_at?,missing_directory,directory_missing,data_missing}]}`。列表不返回提示词或扫描完整产物；status 为验证状态，chatstatus 为当前对话状态。无历史名称时 ip_name 为空字符串，不猜测补齐。
+响应为 `{tasks:[{task_id,projectID,keti,timestamp,ip_id,ip_name,status,chatstatus,created_at?,missing_directory,directory_missing,data_missing}]}`。列表不返回提示词或扫描完整产物；status 为验证状态，chatstatus 为当前对话状态。无历史名称时 ip_name 为空字符串，不猜测补齐。
 
 目录被手动移除时 status=missing、directory_missing/missing_directory=true，仍保留数据库记录；目录存在但元数据缺失、损坏、不可安全读取或 input/workspace/pi_session 目录缺失时 data_missing=true，不能令整个列表失败。NULL 记录保持原值，前端不要据此猜测来源。
 
-`GET /task/get_task?task_id=...` 保留详情、历史提示词与 workspace 文件列表，新任务额外返回 ip_name/tool。`DELETE /task/delete_task?task_id=...` 永久删除目录、会话及数据库记录，返回 `{task_id,status:"deleted"}`；缺目录但数据库仍有记录也可以显式删除。无目录且无映射时返回 404。删除先等待输入收集及验证/聊天退出，避免文件复制与目录删除竞争；损坏元数据不阻止删除。项目清理部分失败时，已成功删除的单任务映射不再保留。
+`GET /task/get_task?task_id=...` 保留详情、历史提示词与 workspace 文件列表，新任务额外返回 ip_name/tool/timestamp。`DELETE /task/delete_task?task_id=...` 永久删除目录、会话及数据库记录，返回 `{task_id,status:"deleted"}`；缺目录但数据库仍有记录也可以显式删除。无目录且无映射时返回 404。删除先等待输入收集及验证/聊天退出，避免文件复制与目录删除竞争；损坏元数据不阻止删除。单任务删除不取消同批其他 IP 或其他批次。
 
 ## 下载
 
@@ -77,6 +78,6 @@ status/chatstatus 支持 queued、running、paused、idle、completed、failed�
 
 环境变量：VIP_PROJECT_DB 默认项目根 projects.sqlite3；VIP_SOURCE_PATH_MAP 默认 `{}`，JSON 路径前缀到本机目录映射，最长前缀优先且拒绝越界；VIP_SOURCE_TIMEOUT 默认 30 秒；VIP_KETI3_TIMEOUT 默认 120 秒。
 
-服务重启将未完成任务落盘 cancelled，不自动执行；正常关闭等待清理操作、取消编排与任务、释放 Pi 并关闭 SQLite。写入映射失败回滚目录；回滚也失败时本进程保留临时项目归属供清理重试，应在重启前处理。日志记录流程、状态和 HTTP 方法/路径/耗时，不记录请求正文、查询参数或提示词。
+服务重启将未完成任务落盘 cancelled，不自动执行；正常关闭取消编排与任务、释放 Pi 并关闭 SQLite。写入映射失败回滚目录；回滚也失败时本进程保留临时批次归属供查询和按 task_id 删除，应在重启前处理。日志记录流程、状态和 HTTP 方法/路径/耗时，不记录请求正文、查询参数或提示词。
 
-在 `server/` 执行 `uv run python -m unittest discover -s tests -v`。测试使用临时目录、临时 SQLite 和网络/Pi 替身，不操作真实任务或默认数据库，覆盖迁移、来源隔离、ID 碰撞、本地复制、列表缺数据标识、删除续执行、ZIP 安全及暂停续聊。
+在 `server/` 执行 `uv run python -m unittest discover -s tests -v`。测试使用临时目录、临时 SQLite 和网络/Pi 替身，不操作真实任务或默认数据库，覆盖历史迁移及重启不覆盖新记录、同项目并发批次隔离、同批时间一致、来源隔离、ID 碰撞、本地复制、列表缺数据标识、删除续执行、ZIP 安全及暂停续聊。

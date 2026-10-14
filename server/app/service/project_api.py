@@ -6,22 +6,16 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from ..vip_task.project import ProjectConflictError, ProjectNotFoundError
-from ..vip_task.task import TaskDeletingError, TaskPathError
 from .api import _read_task
 
 router = APIRouter(prefix='/project')
 
 
-class ProjectDeleteRequest(BaseModel):
+class ProjectRequest(BaseModel):
     projectID: str = Field(min_length=1, pattern=r'\S')
-    source: Literal['keti2', 'keti3']
-
-
-class ProjectRequest(ProjectDeleteRequest):
     source: Literal['keti2', 'keti3'] = 'keti2'
     tool: Literal['CBMC', 'CPAchecker', 'KLEE'] = 'CBMC'
     userprompt: str | None = None
-    force: bool = False
 
     @model_validator(mode='after')
     def validate_source_id(self):
@@ -34,33 +28,11 @@ class ProjectRequest(ProjectDeleteRequest):
 async def create_project(body: ProjectRequest, request: Request):
     try:
         return await request.app.state.project_manager.submit(
-            body.projectID, body.userprompt, force=body.force, source=body.source, tool=body.tool)
-    except (ProjectConflictError, TaskDeletingError) as error:
+            body.projectID, body.userprompt, source=body.source, tool=body.tool)
+    except ProjectConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
-    except TaskPathError as error:
-        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
-    except PermissionError:
-        raise HTTPException(status_code=403, detail='强制提交失败：无权删除旧任务文件') from None
-    except OSError:
-        raise HTTPException(status_code=500, detail='强制提交失败：旧任务未完整删除，请重试') from None
-
-
-@router.post('/delete_project')
-async def delete_project(body: ProjectDeleteRequest, request: Request):
-    try:
-        return await request.app.state.project_manager.delete(body.projectID, source=body.source)
-    except ProjectNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from None
-    except (ProjectConflictError, TaskDeletingError) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from None
-    except TaskPathError as error:
-        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
-    except PermissionError:
-        raise HTTPException(status_code=403, detail='项目删除失败：无权删除任务文件') from None
-    except OSError:
-        raise HTTPException(status_code=500, detail='项目删除失败：任务未完整删除，请重试') from None
 
 
 def _query(call, project_id: str, source: str):

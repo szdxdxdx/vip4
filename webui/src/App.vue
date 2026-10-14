@@ -91,6 +91,6 @@ onMounted(initialize)
         </section>
       </aside>
     </main>
-    <ProjectPanel v-show="mode === 'project'" :active="mode === 'project'" @view-task="viewProjectTask" @forced="resetHistory" />
+    <ProjectPanel v-show="mode === 'project'" :active="mode === 'project'" @view-task="viewProjectTask" @changed="resetHistory" />
   </div>
 </template>

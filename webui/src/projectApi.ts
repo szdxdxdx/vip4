@@ -12,15 +12,9 @@ async function request<T>(url: string, options: RequestInit): Promise<T> {
   }
   return response.json()
 }
-export function createProject(projectID: string, userprompt: string, signal: AbortSignal, force: boolean, source: ProjectSource, tool: string) {
-  return request<{ projectID: string; status: string }>('/project/create_project', {
+export function createProject(projectID: string, userprompt: string, signal: AbortSignal, source: ProjectSource, tool: string) {
+  return request<{ projectID: string; keti: ProjectSource; timestamp: string; status: 'accepted' }>('/project/create_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, source, force, userprompt, tool }),
-  })
-}
-export function deleteProject(projectID: string, source: ProjectSource, signal: AbortSignal) {
-  return request<{ projectID: string; status: 'deleted' }>('/project/delete_project', {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, source }),
+    body: JSON.stringify({ projectID, source, userprompt, tool }),
   })
 }

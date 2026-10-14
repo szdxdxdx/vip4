@@ -4,9 +4,9 @@ import { useProject } from '../composables/useProject'
 import { atticalPrompt } from '../templates/attical'
 import { statusLabel } from '../types'
 const props = defineProps<{ active: boolean }>()
-const emit = defineEmits<{ viewTask: [id: string]; forced: [] }>()
+const emit = defineEmits<{ viewTask: [id: string]; changed: [] }>()
 const { source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, error, busy,
-  listError, loading, submit, forceSubmit, removeProject, refresh } = useProject(toRef(props, 'active'), () => emit('forced'))
+  listError, loading, submit, refresh } = useProject(toRef(props, 'active'), () => emit('changed'))
 const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID.value.trim())
 </script>
 <template>
@@ -40,8 +40,6 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
         <button type="button" class="text-button template-hint" @click="prompt = atticalPrompt">点击填入 AttiCal / CBMC 单 case 演示模板</button>
         <div class="project-actions">
           <button type="submit" :disabled="busy || !valid">提交验证</button>
-          <button v-if="source !== 'local'" type="button" :disabled="busy || !valid" @click="forceSubmit">强制提交</button>
-          <button v-if="source !== 'local'" type="button" :disabled="busy || !valid" @click="removeProject">删除项目</button>
         </div>
       </form>
       <p v-if="error" class="project-error" role="alert">{{ error }}</p>
@@ -58,11 +56,11 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
       <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
       <div class="task-table-scroll" :aria-busy="loading">
         <table class="task-table">
-          <thead><tr><th>projectID</th><th>taskID</th><th>IP 名字</th><th>验证情况</th><th>操作</th></tr></thead>
+          <thead><tr><th>projectID</th><th>taskID</th><th>timestamp（UTC）</th><th>IP 名字</th><th>验证情况</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="task in tasks" :key="task.task_id">
               <td :title="task.projectID || '—'"><span v-if="task.keti" class="source-tag">{{ task.keti }}</span>{{ task.projectID || '—' }}</td>
-              <td>{{ task.task_id }}</td><td :title="task.ip_name || task.ip_id || '—'">{{ task.ip_name || task.ip_id || '—' }}</td>
+              <td>{{ task.task_id }}</td><td>{{ task.timestamp || '—' }}</td><td :title="task.ip_name || task.ip_id || '—'">{{ task.ip_name || task.ip_id || '—' }}</td>
               <td>{{ task.missing_directory ? '实际目录已删除' : task.data_missing ? '任务数据缺失' : statusLabel(task.verification_status || task.status) }}</td>
               <td><button type="button" :disabled="task.missing_directory" @click="emit('viewTask', task.task_id)">查看详情</button></td>
             </tr>

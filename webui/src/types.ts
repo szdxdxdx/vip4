@@ -1,5 +1,6 @@
 export interface Task {
   task_id: string
+  timestamp: string | null
   projectID?: string | null
   keti?: 'keti2' | 'keti3' | null
   ip_name?: string

@@ -57,7 +57,9 @@ def instructions(directory, ip_name, tool, keti, userprompt):
     return prompt
 
 
-def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=None, keti=None, ip_id=''):
+def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=None, keti=None, ip_id='', timestamp=None):
+    from .timestamp import new_timestamp
+    timestamp = timestamp or new_timestamp()
     for _ in range(1000):
         task_id = datetime.now().strftime('%m%d') + ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(4))
         if store.has_task(task_id) or task_id in manager.tasks or task_id in manager.deleting:
@@ -70,9 +72,9 @@ def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=N
         try:
             path = directory / 'task.json'
             metadata = json.loads(path.read_text(encoding='utf-8'))
-            metadata.update(ip_name=ip_name, tool=tool)
+            metadata.update(ip_name=ip_name, tool=tool, timestamp=timestamp)
             _write_metadata(path, metadata)
-            store.add(task_id, project_id, ip_id, keti)
+            store.add(task_id, project_id, ip_id, keti, timestamp)
         except Exception as error:
             try:
                 manager.tasks[task_id].delete_files()
@@ -82,7 +84,7 @@ def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=N
             if isinstance(error, sqlite3.IntegrityError) and store.has_task(task_id):
                 continue
             raise
-        return result
+        return {**result, 'timestamp': timestamp}
     raise RuntimeError('无法分配任务 ID：碰撞重试次数超限')
 
 
