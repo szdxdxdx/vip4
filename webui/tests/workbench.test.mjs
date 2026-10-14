@@ -1314,39 +1314,58 @@ test('任务列表下载原因优先且 ready 不覆盖排队、完成及验证�
   assert.match(batchStatusLabel('empty'), /项目为空/)
 })
 
-test('批次提示仅以真实 taskID 为前缀，多任务用顿号连接，暂无 ID 只显示状态原因', async () => {
+test('真实项目组件消息集中：忙态、提交与查询错误、全部批次和 taskID 前缀', async () => {
   const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
   globalThis.Document = class {}; globalThis.ShadowRoot = class {}
   const clock = projectClock(), rootElement = {}
-  let serial = 0
+  let serial = 0, rejectSubmit, failQuery = false
   const batches = [
     { timestamp: 'timestamp-1', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-one' }] },
     { timestamp: 'timestamp-2', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-two' }, { task_id: 'task-three' }] },
     { timestamp: 'timestamp-3', status: 'failed', error: '项目打包失败' },
     { timestamp: 'timestamp-4', status: 'empty', tasks: [] },
+    { timestamp: 'timestamp-5', status: 'completed', tasks: [{ task_id: 'task-done' }] },
   ]
   globalThis.fetch = async url => {
     if (url === '/task/list_dataset') return response({ ips: [] })
-    if (url === '/project/create_project') return response({ projectID: 'source-project', keti: 'keti3', timestamp: `timestamp-${++serial}`, status: 'accepted' })
-    if (url.startsWith('/task/list_tasks')) return response({ tasks: [] })
+    if (url === '/project/create_project') {
+      if (serial === 5) return new Promise((_, reject) => { rejectSubmit = reject })
+      return response({ projectID: 'source-project', keti: 'keti3', timestamp: `timestamp-${++serial}`, status: 'accepted' })
+    }
+    if (url.startsWith('/task/list_tasks')) {
+      if (failQuery) throw new Error('查询失败')
+      return response({ tasks: [] })
+    }
     if (url.startsWith('/project/get_progress')) return response({ batches: [{ timestamp: 'historical', status: 'failed', tasks: [{ task_id: 'historical-task' }] }, ...batches] })
     assert.fail(url)
   }
   const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
   const nodes = () => descendants(rootElement)
   const text = node => (node.text === 'v-if' ? '' : node.text || '') + (node.children || []).map(text).join('')
+  const messages = () => nodes().find(n => n.props?.class === 'project-messages')
   const hints = () => nodes().find(n => n.props?.['aria-label'] === '本次会话提交批次').children
     .filter(n => n.tag === 'p').map(n => text(n).trim())
   const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: true }) } })
   try {
     app.mount(rootElement); await flushProject()
+    assert.equal(messages(), undefined)
+    nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
+    await flushProject()
+    assert.match(text(messages()), /请选择数据集 IP/)
+    assert.equal(messages().props['aria-labelledby'], 'project-messages-title')
+    assert.equal(nodes().find(n => n.props?.id === 'project-messages-title').text, '消息')
+    const output = nodes().find(n => n.props?.['aria-label'] === '全部验证任务')
+    const table = nodes().find(n => n.props?.class === 'task-table-scroll')
+    assert.equal(messages().parent, output)
+    assert.ok(output.children.indexOf(table) < output.children.indexOf(messages()))
+    assert.ok(!descendants(nodes().find(n => n.props?.class === 'panel project-input')).some(n => n.props?.role === 'alert' || n.props?.role === 'status'))
     nodes().find(n => n.props?.id === 'project-source').props['onUpdate:modelValue']('keti3'); await nextTick()
     nodes().find(n => n.props?.id === 'project-id').props['onUpdate:modelValue']('source-project'); await nextTick()
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < batches.length; i++) {
       nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
       await flushProject()
     }
-    assert.deepEqual(hints(), Array(4).fill('已接受，等待下载'))
+    assert.deepEqual(hints(), Array(batches.length).fill('已接受，等待下载'))
     nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
     await flushProject()
     assert.deepEqual(hints(), [
@@ -1354,7 +1373,67 @@ test('批次提示仅以真实 taskID 为前缀，多任务用顿号连接，暂
       'task-two、task-three：失败；输入下载失败',
       '失败；项目打包失败',
       '项目为空，没有可验证的 IP',
+      'task-done：已完成',
     ])
     for (const hint of hints()) assert.doesNotMatch(hint, /keti3|source-project|timestamp-|historical-task|undefined/)
+    const savedHints = hints()
+    nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
+    await nextTick()
+    assert.match(text(messages()), /请求中…/)
+    assert.ok(descendants(messages()).some(n => n.props?.role === 'status' && n.text === '请求中…'))
+    assert.deepEqual(hints(), savedHints)
+    failQuery = true
+    nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
+    await flushProject()
+    assert.match(text(messages()), /请求中….*查询失败/s)
+    rejectSubmit(new Error('提交失败'))
+    await flushProject()
+    assert.doesNotMatch(text(messages()), /请求中…/)
+    assert.deepEqual(descendants(messages()).filter(n => n.props?.role === 'alert').map(text), ['提交失败', '查询失败'])
+    assert.deepEqual(hints(), savedHints)
+    assert.equal(nodes().filter(n => n.props?.class === 'project-messages').length, 1)
+    for (const node of nodes().filter(n => ['project-error', 'project-hint'].includes(n.props?.class) && n.tag === 'p')) {
+      assert.ok(descendants(messages()).includes(node))
+    }
+    const batchRows = descendants(messages()).filter(n => n.tag === 'p' && n.props?.role === 'status')
+    assert.deepEqual(batchRows.map(n => n.props.class), ['project-error', 'project-error', 'project-error', 'project-hint', 'project-hint'])
   } finally { app.unmount(); clock.restore(); globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot }
+})
+
+test('消息区边框与独立滚动；对话间距紧凑且窄屏不放大，保留输出滚动', async () => {
+  const css = await readFile(resolve(root, 'src/style.css'), 'utf8')
+  const rules = selector => [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(match => match[1].trim() === selector).map(match => match[2])
+  const messageArea = rules('.project-messages')[0]
+  assert.match(messageArea, /border:2px solid/)
+  assert.match(messageArea, /max-height:min\(200px,30%\)/)
+  assert.match(messageArea, /overflow:auto/)
+  assert.match(rules('.project-output')[0], /overflow:hidden/)
+  assert.match(rules('.task-table-scroll')[0], /overflow:auto; flex:1; min-height:0/)
+  assert.match(rules('.project-output > :not(.task-table-scroll)')[0], /flex-shrink:0/)
+  const maxSpacing = (selector, property, maximum) => {
+    const declarations = rules(selector)
+    assert.ok(declarations.length, selector)
+    for (const rule of declarations) {
+      for (const match of rule.matchAll(new RegExp(`(?:^|;)\\s*${property}:([^;]+)`, 'g'))) {
+        const values = [...match[1].matchAll(/(\d+)px/g)].map(m => Number(m[1]))
+        assert.ok(values.length && values.every(value => value <= maximum), `${selector} ${property}: ${match[1]}`)
+      }
+    }
+  }
+  maxSpacing('.message-scroll', 'padding', 10)
+  maxSpacing('.message', 'margin-bottom', 10)
+  maxSpacing('.message-label', 'gap', 6)
+  maxSpacing('.message-label', 'margin-bottom', 4)
+  maxSpacing('.prompt-content', 'padding', 8)
+  maxSpacing('.prompt-content pre', 'padding', 6)
+  maxSpacing('.thinking pre', 'padding', 8)
+  maxSpacing('.tool-card>summary', 'padding', 8)
+  maxSpacing('.tool-body', 'padding', 8)
+  maxSpacing('.tool-body pre', 'padding', 6)
+  maxSpacing('.tool-body pre', 'margin-bottom', 6)
+  maxSpacing('.message.error', 'padding', 8)
+  assert.match(rules('.thinking pre')[0], /max-height:300px;\s*overflow:auto/)
+  assert.match(rules('.tool-body pre')[0], /max-height:280px;\s*overflow:auto/)
+  assert.match(rules('pre')[0], /white-space:pre-wrap;\s*overflow-wrap:anywhere/)
 })

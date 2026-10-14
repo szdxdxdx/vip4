@@ -42,8 +42,6 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
           <button type="submit" :disabled="busy || !valid">提交验证</button>
         </div>
       </form>
-      <p v-if="error" class="project-error" role="alert">{{ error }}</p>
-      <p v-if="busy" class="project-hint" role="status">请求中…</p>
     </section>
     <section class="panel project-output" aria-label="全部验证任务">
       <div class="task-table-heading"><h2>全部任务</h2><span class="project-hint">{{ tasks.length }} 条</span></div>
@@ -53,12 +51,6 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
         <button type="submit" :disabled="loading">查询</button>
         <button type="button" :disabled="loading" @click="queryID = ''; queryTaskID = ''; refresh()">全部</button>
       </form>
-      <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
-      <div v-if="batches.length" aria-label="本次会话提交批次">
-        <p v-for="batch in batches" :key="JSON.stringify([batch.keti, batch.projectID, batch.timestamp])" :class="batch.error ? 'project-error' : 'project-hint'" role="status">
-          <span v-if="batch.tasks?.length">{{ batch.tasks.map(task => task.task_id).join('、') }}：</span>{{ batchStatusLabel(batch.status) }}<span v-if="batch.error">；{{ batch.error }}</span>
-        </p>
-      </div>
       <div class="task-table-scroll" :aria-busy="loading">
         <table class="task-table">
           <thead><tr><th>projectID</th><th>taskID</th><th>timestamp（UTC）</th><th>IP 名字</th><th>验证情况</th><th>操作</th></tr></thead>
@@ -73,6 +65,17 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
         </table>
         <p v-if="!tasks.length" class="empty small">{{ loading ? '正在读取任务…' : '暂无任务。提交验证任务后，请手动刷新查询' }}</p>
       </div>
+      <section v-if="error || busy || listError || batches.length" class="project-messages" aria-labelledby="project-messages-title">
+        <h3 id="project-messages-title">消息</h3>
+        <p v-if="busy" class="project-hint" role="status">请求中…</p>
+        <p v-if="error" class="project-error" role="alert">{{ error }}</p>
+        <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
+        <div v-if="batches.length" aria-label="本次会话提交批次">
+          <p v-for="batch in batches" :key="JSON.stringify([batch.keti, batch.projectID, batch.timestamp])" :class="batch.error ? 'project-error' : 'project-hint'" role="status">
+            <span v-if="batch.tasks?.length">{{ batch.tasks.map(task => task.task_id).join('、') }}：</span>{{ batchStatusLabel(batch.status) }}<span v-if="batch.error">；{{ batch.error }}</span>
+          </p>
+        </div>
+      </section>
     </section>
   </main>
 </template>

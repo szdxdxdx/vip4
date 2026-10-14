@@ -251,21 +251,21 @@ details>summary {
   overflow-y:auto;
   min-height:0;
   flex:1;
-  padding:16px;
+  padding:10px;
   scrollbar-gutter:stable
 }
 .message {
-  margin-bottom:22px;
+  margin-bottom:10px;
   min-width:0
 }
 .message-label {
   display:flex;
   align-items:center;
-  gap:8px;
+  gap:6px;
   font-size:12px;
   font-weight:600;
   color:#626a72;
-  margin-bottom:10px
+  margin-bottom:4px
 }
 .avatar {
   width:24px;
@@ -285,12 +285,15 @@ details>summary {
   background:#f5f5f5;
   border:1px solid var(--line);
   border-radius:0;
-  padding:2px 12px;
+  padding:2px 8px;
   font-size:12px;
   color:#596169
 }
+.message details>summary {
+  padding-block:4px
+}
 .prompt-content pre {
-  padding:8px 0 14px;
+  padding:4px 0 6px;
   color:#454d55
 }
 .message-text {
@@ -300,13 +303,13 @@ details>summary {
 .thinking {
   font-size:12px;
   color:#626a72;
-  margin:0 0 10px 32px
+  margin:0 0 4px 32px
 }
 .thinking pre {
   font-size:12px;
   color:#626a72;
   background:#f5f5f5;
-  padding:12px;
+  padding:8px;
   border-radius:0;
   max-height:300px;
   overflow:auto
@@ -319,8 +322,8 @@ details>summary {
 .tool-card>summary {
   display:flex;
   align-items:center;
-  gap:9px;
-  padding:11px 12px;
+  gap:6px;
+  padding:6px 8px;
   font-size:12px;
   list-style:none
 }
@@ -352,8 +355,11 @@ details>summary {
   background:#faf6f5
 }
 .tool-body {
-  padding:13px;
+  padding:8px;
   border-top:1px solid var(--line)
+}
+.tool-body h4 {
+  margin-bottom:4px
 }
 .tool-body pre {
   max-height:280px;
@@ -361,8 +367,8 @@ details>summary {
   font-size:12px;
   background:#f1f2f3;
   border-radius:0;
-  padding:10px;
-  margin-bottom:12px
+  padding:6px;
+  margin-bottom:6px
 }
 .tool-body pre:last-child {
   margin-bottom:0
@@ -371,7 +377,7 @@ details>summary {
   background:#f5ebe9;
   border:1px solid #cba6a1;
   border-radius:0;
-  padding:12px
+  padding:8px
 }
 .error .avatar {
   background:#ecd6d2;
@@ -645,7 +651,7 @@ iframe {
     height:580px
   }
   .message-scroll {
-    padding:12px
+    padding:8px
   }
   .report-toolbar {
     flex-wrap:wrap
@@ -725,7 +731,7 @@ iframe {
 .mode-controls .active { background:var(--soft); border-color:var(--accent) }
 .project-panel { flex:1; min-height:0; overflow:auto; padding:10px; display:grid; grid-template-columns:minmax(260px,330px) minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:10px; align-items:stretch }
 .project-input,.project-output { padding:14px; min-width:0; min-height:0; overflow:auto }
-.project-output { display:flex; flex-direction:column }
+.project-output { display:flex; flex-direction:column; overflow:hidden }
 .project-output > :not(.task-table-scroll) { flex-shrink:0 }
 .project-input form { display:flex; flex-direction:column; gap:10px; margin:16px 0 }
 .project-input input,.project-input textarea,.project-input select,.task-query input { width:100%; border:1px solid var(--line); padding:8px; border-radius:0; background:#fff; color:inherit }
@@ -738,6 +744,10 @@ iframe {
 .task-query input { min-width:0; max-width:240px }
 .task-query button { flex-shrink:0 }
 .task-table-scroll { overflow:auto; flex:1; min-height:0 }
+/* 消息与任务表分别滚动，历史批次不占满列表。 */
+.project-messages { border:2px solid var(--accent); padding:8px 10px; margin-top:10px; max-height:min(200px,30%); min-height:0; overflow:auto; overflow-wrap:anywhere }
+.project-messages h3 { font-size:14px; margin-bottom:6px }
+.project-messages p { margin:4px 0; font-size:12px; line-height:1.6 }
 .task-table { width:100%; border-collapse:collapse; font-size:12px; text-align:left; white-space:nowrap }
 .task-table th,.task-table td { padding:8px; border-bottom:1px solid var(--line); max-width:260px; overflow:hidden; text-overflow:ellipsis }
 .task-table th { color:var(--muted); font-weight:normal }
