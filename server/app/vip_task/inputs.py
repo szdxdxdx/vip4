@@ -17,21 +17,42 @@ class CreationRollbackError(Exception):
 
 
 TOOLS = ('CBMC', 'CPAchecker', 'KLEE')
-DEFAULTS = {
-    None: '本地数据集的形式模型和代码遵循 verify-ip SKILL；保留 ip 与 include 相对目录。',
-    'keti2': '课题二形式模型格式和代码组织可能不同于本地数据集，请理解实际模型并适配验证流程。',
-    'keti3': '课题三整个产物视为一个 IP；IR 是形式模型，产物根层 .c/.h 是主代码，iplib 等子目录是依赖；保留原编码，缺模型时明确报告。',
-}
 
+def instructions(directory, ip_name, tool, keti, userprompt):
+    prompt = f"""
+<task_prompt>
+请你使用 SKILL verify-ip，对指定的软件 IP 进行形式化验证，严格遵循 SKILL 工作流的步骤执行验证任务
 
-def instructions(directory, tool, keti, userprompt):
-    # 自动 ID 确定后展开模板路径，避免用户段遗留任务占位符。
-    userprompt = (userprompt or '').replace('<task_id>', directory.name)
-    return (f'使用 verify-ip SKILL，使用 {tool} 验证软件 IP。\n'
-            f'{DEFAULTS[keti]}\n只读输入：{directory / "input"}；来源清单：{directory / "files.csv"}。\n'
-            f'报告、驱动、配置和工具输出按 SKILL 约定写入 {directory / "workspace"}/<tool>_suite/output，临时文件写入 workspace/tmp。\n'
-            '如果 userpropmt 中有内容，则以 userpropmt 为准。\n'
-            f'<userpropmt>\n{userprompt or ""}\n</userpropmt>')
+待验证的 IP：{ip_name}
+使用的验证工具：{tool}
+
+待验证的 IP 相关文件位于 `{directory / "input"}`
+> 待验证的 IP 相关文件实际拷贝自其他目录或下载自网络，若需要查明，详见 `{directory / "files.csv"}`
+
+要求：
+- 不要读写未提及的其他目录中的文件
+- 争取在一轮对话内完成任务，不限制工具调用次数
+- 只有生成最终验证结果报告，任务才算完成。完成任务后，只需在会话中答复【任务已完成】
+</task_prompt>
+"""
+    if keti:
+        prompt += f"""
+补充说明：实际验证任务中提供的形式模型格式可能与 SKILL 约定的输入格式不同，请理解实际的形式模型，并适配验证流程，将形式模型转换成 SKILL 约定的 IR 格式
+"""
+    if userprompt:
+        prompt += f"""
+
+----------
+
+以上为默认的验证任务说明，下方为用户根据实际业务情况，提供的额外说明。
+- 需要同时理解默认业务说明和用户说明
+- 若用户补充说明与默认说明有冲突，必须以用户的为准
+- 若用户的说明与默认说明不冲突，请同时遵循两者的要求。
+<userpropmt>
+{userprompt.replace('<task_id>', directory.name)}
+</userpropmt>
+"""
+    return prompt
 
 
 def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=None, keti=None, ip_id=''):
@@ -41,7 +62,7 @@ def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=N
             continue
         directory = (config.VIP_TASK_DIR / task_id).resolve()
         try:
-            result = manager.create_task(task_id, instructions(directory, tool, keti, userprompt), start=False)
+            result = manager.create_task(task_id, instructions(directory, ip_name, tool, keti, userprompt), start=False)
         except TaskExistsError:
             continue
         try:
