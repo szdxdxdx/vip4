@@ -100,6 +100,8 @@ class TaskManager:
             if not isinstance(message, str) or not message.strip():
                 raise TaskPathError('message 不能为空', 400)
             status = Task._metadata(task.task_dir)['status']
+            if Task._metadata(task.task_dir).get('preparation_status') == 'failed':
+                raise TaskConflictError('文件下载失败，请重新提交项目')
             if status == 'created' or (task.preparation and not task.preparation.done()):
                 raise TaskConflictError('任务尚在准备输入')
             if not task.events:
@@ -138,6 +140,8 @@ class TaskManager:
         async with task.control_lock:
             if task_id in self.deleting or self.closing:
                 raise TaskConflictError('任务正在删除或关闭')
+            if Task._metadata(task.task_dir).get('preparation_status') == 'failed':
+                raise TaskConflictError('文件下载失败，请重新提交项目')
             if Task._metadata(task.task_dir)['status'] == 'created':
                 raise TaskConflictError('任务尚在准备输入')
             task.pausing = True
@@ -157,13 +161,27 @@ class TaskManager:
                 task.pausing = False
             return {'task_id': task_id, 'status': 'paused'}
 
+    def set_preparation(self, task_id: str, status: str, error: str = ''):
+        path = self._get_task(task_id).task_dir / 'task.json'
+        metadata = json.loads(path.read_text(encoding='utf-8'))
+        metadata.update(preparation_status=status, preparation_error=error)
+        if status == 'failed':
+            metadata.update(status='failed', chatstatus='failed', verification_status='failed')
+        _write_metadata(path, metadata)
+
     async def prepare_task(self, task_id: str, collect, *args):
         if task_id in self.deleting:
             raise TaskDeletingError('任务正在删除')
         task = self._get_task(task_id)
+        self.set_preparation(task_id, 'downloading')
         task.preparation = asyncio.create_task(asyncio.to_thread(collect, *args))
         try:
-            return await asyncio.shield(task.preparation)
+            result = await asyncio.shield(task.preparation)
+            self.set_preparation(task_id, 'ready')
+            return result
+        except Exception as error:
+            self.set_preparation(task_id, 'failed', f'文件下载失败：{error}')
+            raise
         except asyncio.CancelledError:
             # 文件线程无法强制取消，退出前等待其结束。
             await asyncio.gather(task.preparation, return_exceptions=True)
@@ -174,7 +192,10 @@ class TaskManager:
             raise TaskDeletingError('任务正在删除')
         task = self._get_task(task_id)
         if task.job is None:
-            if Task._metadata(task.task_dir)['status'] != 'created':
+            metadata = Task._metadata(task.task_dir)
+            if metadata.get('preparation_status') in ('downloading', 'failed'):
+                raise TaskConflictError('任务输入尚未准备成功')
+            if metadata['status'] != 'created':
                 raise ValueError('只有新建任务可以启动')
             self._schedule(task)
         await task.job
@@ -252,7 +273,7 @@ class TaskManager:
                    'missing_directory': missing, 'directory_missing': missing, 'data_missing': False}
             try:
                 metadata = Task._metadata(Task._task_dir(entry['task_id']))
-                row.update({key: metadata[key] for key in ('ip_name', 'created_at', 'chatstatus') if key in metadata})
+                row.update({key: metadata[key] for key in ('ip_name', 'created_at', 'chatstatus', 'preparation_status', 'preparation_error') if key in metadata})
                 if row['timestamp'] is None:
                     row['timestamp'] = metadata.get('timestamp')
                 row['status'] = metadata.get('verification_status', metadata['status'])

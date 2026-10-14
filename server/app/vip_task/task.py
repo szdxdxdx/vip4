@@ -296,12 +296,12 @@ class Task:
         ):
             raise TaskMetadataError('任务元数据格式错误')
         if any(key in metadata and not isinstance(metadata[key], str)
-               for key in ('chatstatus', 'verification_status')) or (
+               for key in ('chatstatus', 'verification_status', 'preparation_status', 'preparation_error')) or (
             'turn_id' in metadata and (type(metadata['turn_id']) is not int or metadata['turn_id'] < 0)
         ):
             raise TaskMetadataError('任务聊天元数据格式错误')
         task = {'task_id': task_dir.name, **{
-            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id', 'ip_name', 'tool', 'timestamp') if key in metadata
+            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id', 'ip_name', 'tool', 'timestamp', 'preparation_status', 'preparation_error') if key in metadata
         }}
         task.setdefault('chatstatus', task['status'])
         task.setdefault('turn_id', 0)

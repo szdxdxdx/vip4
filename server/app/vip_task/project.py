@@ -123,8 +123,10 @@ class ProjectManager:
     def _create(self, key: ProjectKey, prompt: str | None, ip_id: str, ip_name: str = '', tool: str = 'CBMC') -> str:
         from .inputs import create_registered, CreationRollbackError
         try:
-            return create_registered(self.task_manager, self.store, ip_name, tool, prompt,
-                                     project_id=key[1], keti=key[0], ip_id=ip_id, timestamp=key[2])['task_id']
+            task_id = create_registered(self.task_manager, self.store, ip_name, tool, prompt,
+                                        project_id=key[1], keti=key[0], ip_id=ip_id, timestamp=key[2])['task_id']
+            self.task_manager.set_preparation(task_id, 'downloading')
+            return task_id
         except CreationRollbackError as error:
             self.unmapped.setdefault(key, []).append({'task_id': error.task_id, 'ip_id': ip_id, 'timestamp': key[2]})
             self._mark_unfinished(error.task_id)
@@ -210,7 +212,7 @@ class ProjectManager:
             state.update(status='cancelled', error='项目编排已取消')
             raise
         except Exception as error:
-            state.update(status='failed', error=str(error))
+            state.update(status='failed', error=f'项目输入查询或打包失败：{error}')
             logger.exception('项目执行失败 projectID=%s', key)
         finally:
             for entry in self._entries(key):

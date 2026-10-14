@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from app.vip_task import config
 from app.vip_task.keti2_sources import Keti2Sources, Keti2Config, FIELDS
 from app.vip_task.project import ProjectManager, ProjectStore, ProjectNotFoundError
-from app.vip_task.task import Task, _write_metadata
+from app.vip_task.task import Task, TaskConflictError, _write_metadata
 from app.vip_task.task_manager import TaskManager
 from main import create_app
 
@@ -308,6 +308,40 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(progress['status'], 'completed')
         self.assertEqual([task['ip_id'] for task in progress['tasks']], ['', '', ''])
 
+    async def test_collecting_without_fake_tasks_and_created_downloading(self):
+        searched, collecting, release_search, release_collect = (threading.Event() for _ in range(4))
+        def search(project_id):
+            searched.set()
+            release_search.wait(3)
+            return [item(self.source)]
+        def collect(*args):
+            collecting.set()
+            release_collect.wait(3)
+            raise OSError('raw download error')
+        with patch.object(self.keti2_sources, 'search', search), patch.object(self.keti2_sources, 'collect', collect):
+            accepted = await self.manager.submit('pending')
+            try:
+                self.assertTrue(await asyncio.to_thread(searched.wait, 3))
+                batch = self.manager.progress('pending', source='keti2')['batches'][0]
+                self.assertEqual(batch['timestamp'], accepted['timestamp'])
+                self.assertEqual(batch['status'], 'collecting')
+                self.assertEqual(batch['tasks'], [])
+                self.assertEqual(self.tasks.list_tasks()['tasks'], [])
+                release_search.set()
+                self.assertTrue(await asyncio.to_thread(collecting.wait, 3))
+                row = self.tasks.list_tasks()['tasks'][0]
+                self.assertEqual(row['status'], 'created')
+                self.assertEqual(row['preparation_status'], 'downloading')
+                with self.assertRaises(TaskConflictError):
+                    await self.tasks.run_task(row['task_id'])
+            finally:
+                release_search.set()
+                release_collect.set()
+                await self.manager.jobs[batch_key(self.manager, 'keti2', 'pending')]
+        row = self.tasks.list_tasks()['tasks'][0]
+        self.assertEqual(row['status'], 'failed')
+        self.assertEqual(row['preparation_error'], '文件下载失败：raw download error')
+
     async def test_empty_and_network_failure(self):
         with patch.object(self.keti2_sources, 'search', return_value=[]):
             await self.manager.submit('empty')
@@ -317,7 +351,21 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.keti2_sources, 'search', side_effect=OSError('network failed')):
             await self.manager.submit('bad')
             await self.manager.jobs[batch_key(self.manager, 'keti2', 'bad')]
-        self.assertEqual(self.manager.progress('bad', source='keti2')['error'], 'network failed')
+        self.assertEqual(self.manager.progress('bad', source='keti2')['error'], '项目输入查询或打包失败：network failed')
+
+    async def test_keti3_pack_failure_and_empty_have_timestamp_without_tasks(self):
+        with patch.object(self.manager.keti3_sources, 'search', side_effect=OSError('pack rejected')):
+            first = await self.manager.submit('7', source='keti3')
+            await self.manager.jobs[('keti3', '7', first['timestamp'])]
+        with patch.object(self.manager.keti3_sources, 'search', return_value=[]):
+            second = await self.manager.submit('7', source='keti3')
+            await self.manager.jobs[('keti3', '7', second['timestamp'])]
+        batches = self.manager.progress('7', source='keti3')['batches']
+        self.assertEqual([batch['timestamp'] for batch in batches], [first['timestamp'], second['timestamp']])
+        self.assertEqual([batch['status'] for batch in batches], ['failed', 'empty'])
+        self.assertIn('项目输入查询或打包失败：pack rejected', batches[0]['error'])
+        self.assertEqual([batch['tasks'] for batch in batches], [[], []])
+        self.assertEqual(self.tasks.list_tasks()['tasks'], [])
 
     async def test_collection_failure_does_not_skip_other_ips(self):
         async def fake_run(task):
@@ -330,6 +378,18 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(progress['status'], 'failed')
         self.assertEqual(progress['total'], 2)
         self.assertEqual([t['status'] for t in progress['tasks']], ['failed', 'completed'])
+        failed, ready = progress['tasks']
+        self.assertEqual(failed['preparation_status'], 'failed')
+        self.assertIn('文件下载失败：', failed['preparation_error'])
+        self.assertEqual(ready['preparation_status'], 'ready')
+        rows = {row['task_id']: row for row in self.tasks.list_tasks()['tasks']}
+        self.assertEqual(rows[failed['task_id']]['preparation_error'], failed['preparation_error'])
+        for control in (self.tasks.run_task, self.tasks.pause_task):
+            with self.assertRaises(TaskConflictError):
+                await control(failed['task_id'])
+        with self.assertRaises(TaskConflictError):
+            await self.tasks.send_message(failed['task_id'], '不能使用缺失输入启动 Pi')
+        self.assertEqual(self.tasks.get_task(failed['task_id'])['task']['preparation_error'], failed['preparation_error'])
 
     async def test_shutdown_cancels_running_and_waiting(self):
         entered = asyncio.Event()

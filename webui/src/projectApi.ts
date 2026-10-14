@@ -1,4 +1,4 @@
-import type { ProjectSource } from './projectTypes'
+import type { ProjectBatch, ProjectSource } from './projectTypes'
 
 async function request<T>(url: string, options: RequestInit): Promise<T> {
   const response = await fetch(url, options)
@@ -17,4 +17,9 @@ export function createProject(projectID: string, userprompt: string, signal: Abo
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectID, source, userprompt, tool }),
   })
+}
+
+export function getProgress(projectID: string, source: ProjectSource, signal: AbortSignal) {
+  const query = new URLSearchParams({ projectID, source })
+  return request<{ batches: ProjectBatch[] }>(`/project/get_progress?${query}`, { signal })
 }

@@ -81,3 +81,10 @@ status/chatstatus 支持 queued、running、paused、idle、completed、failed�
 服务重启将未完成任务落盘 cancelled，不自动执行；正常关闭取消编排与任务、释放 Pi 并关闭 SQLite。写入映射失败回滚目录；回滚也失败时本进程保留临时批次归属供查询和按 task_id 删除，应在重启前处理。日志记录流程、状态和 HTTP 方法/路径/耗时，不记录请求正文、查询参数或提示词。
 
 在 `server/` 执行 `uv run python -m unittest discover -s tests -v`。测试使用临时目录、临时 SQLite 和网络/Pi 替身，不操作真实任务或默认数据库，覆盖历史迁移及重启不覆盖新记录、同项目并发批次隔离、同批时间一致、来源隔离、ID 碰撞、本地复制、列表缺数据标识、删除续执行、ZIP 安全及暂停续聊。
+
+
+## 输入准备与批次查询
+
+项目提交返回来源、项目 ID 和唯一 UTC 时间戳。`get_progress` 的 `batches` 包含尚未创建任务的内存批次，查询、打包异常返回中文上下文和原始原因，空项目返回 `empty`；不为批次创建占位任务。内存批次在服务重启后不保留，已有任务仍可从持久化映射查询。
+
+输入准备使用附加元数据 `preparation_status`（`downloading`、`failed`、`ready`）及字符串 `preparation_error`。下载期间任务保持 `created`，成功后正常进入执行队列；失败落盘为 `failed` 并保留“文件下载失败”原因，禁止缺失输入任务的启动和续聊。任务列表透传准备字段，不将其当作验证结论覆盖排队、完成等状态。

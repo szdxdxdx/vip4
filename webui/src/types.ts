@@ -12,6 +12,8 @@ export interface Task {
   created_at: string
   turn_id?: number
   chatstatus?: string
+  preparation_status?: 'downloading' | 'failed' | 'ready'
+  preparation_error?: string
   verification_status?: string
   reports?: string[]
 }
@@ -46,3 +48,13 @@ export function statusLabel(status: string) {
 
 // 英文 IP 标识原样显示，旧任务退回任务 ID。
 export const ipLabel = (task: Task) => task.ip_name || task.ip_id || task.task_id
+
+// 下载状态仅修饰未启动任务，不覆盖入队及验证结论。
+export function taskStatusLabel(task: Task) {
+  if (task.preparation_status === 'failed') return task.preparation_error || '文件下载失败'
+  const status = task.verification_status || task.status
+  return status === 'created' && task.preparation_status === 'downloading' ? '下载中' : statusLabel(status)
+}
+export function batchStatusLabel(status: string) {
+  return ({ accepted: '已接受，等待下载', collecting: '下载中（查询 / 打包 / 收集输入）', empty: '项目为空，没有可验证的 IP' } as Record<string, string>)[status] || statusLabel(status)
+}

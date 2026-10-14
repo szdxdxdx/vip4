@@ -966,7 +966,7 @@ function projectClock() {
   const originalSet = globalThis.setTimeout, originalClear = globalThis.clearTimeout
   const timers = new Map()
   let serial = 0
-  globalThis.setTimeout = (callback, delay) => { assert.equal(delay, 2000); timers.set(++serial, callback); return serial }
+  globalThis.setTimeout = (callback, delay) => { assert.equal(delay, 1000); timers.set(++serial, callback); return serial }
   globalThis.clearTimeout = id => timers.delete(id)
   return { timers, tick() { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()) },
     restore() { globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear } }
@@ -1057,6 +1057,8 @@ test('同项目重复提交无确认无删除，忙时防重，后端生成批�
       projectID: '123', source: 'keti3', userprompt: '用户要求', tool: 'KLEE',
     })
     assert.equal(changes, 2)
+    assert.equal(p.batches.value.length, 2)
+    assert.equal(clock.timers.size, 1)
     assert.equal(p.projectID.value, '123')
     assert.equal(p.prompt.value, '用户要求')
     assert.equal(calls.some(c => /delete|list_tasks/.test(c.url)), false)
@@ -1066,7 +1068,7 @@ test('同项目重复提交无确认无删除，忙时防重，后端生成批�
   } finally { app.unmount(); clock.restore() }
 })
 
-test('项目列表仅手动查询，挂载激活提交不请求，无轮询，迟到响应隔离', async () => {
+test('本地列表仅手动查询，挂载激活提交不请求，无轮询，迟到响应隔离', async () => {
   const clock = projectClock(), old = deferred(), calls = []
   globalThis.fetch = async (url, options = {}) => {
     if (url === '/task/list_dataset') return response({ ips: [], tools: [] })
@@ -1231,4 +1233,128 @@ test('右栏删除当前任务：无选择禁用、忙态防重、错误保留�
     assert.equal(confirmations.length, 2)
     assert.ok(confirmations.every(text => text.includes('永久删除任务「A」')))
   } finally { app.unmount(); for (const c of streams) { try { c.close() } catch {} } }
+})
+
+
+test('远程成功后延迟一秒只刷新一次，手动刷新同时查批次，时间戳隔离并显示空项目与错误', async () => {
+  const clock = projectClock(), calls = []
+  let serial = 0, stage = 'collecting'
+  globalThis.fetch = async url => {
+    calls.push(url)
+    if (url === '/task/list_dataset') return response({ ips: [] })
+    if (url === '/project/create_project') return response({ projectID: '7', keti: 'keti2', timestamp: `t${++serial}`, status: 'accepted' })
+    if (url.startsWith('/task/list_tasks')) return response({ tasks: [] })
+    if (url.startsWith('/project/get_progress')) return response({ batches: [
+      { timestamp: 'history', status: 'failed', error: '不属于本次会话' },
+      { timestamp: 't1', status: stage, ...(stage === 'failed' ? { error: '项目输入查询或打包失败：network failed' } : {}) },
+      { timestamp: 't2', status: stage === 'failed' ? 'empty' : stage },
+    ] })
+    assert.fail(url)
+  }
+  const { app, p } = mountedProject()
+  try {
+    await flushProject()
+    p.source.value = 'keti2'; p.projectID.value = '7'
+    await p.submit(); await p.submit()
+    assert.equal(calls.filter(url => url.includes('list_tasks')).length, 0)
+    assert.equal(clock.timers.size, 1)
+    clock.tick(); await flushProject()
+    assert.equal(calls.filter(url => url.includes('list_tasks')).length, 1)
+    assert.equal(calls.filter(url => url.includes('get_progress')).length, 1)
+    assert.deepEqual(p.batches.value.map(b => b.status), ['collecting', 'collecting'])
+    assert.equal(clock.timers.size, 0)
+    clock.tick(); await flushProject()
+    assert.equal(calls.filter(url => url.includes('list_tasks')).length, 1)
+    stage = 'failed'; await p.refresh()
+    assert.match(p.batches.value[0].error, /查询或打包失败.*network failed/)
+    assert.equal(p.batches.value[1].status, 'empty')
+    assert.equal(p.batches.value[1].error, undefined)
+    assert.deepEqual(p.batches.value.map(b => b.timestamp), ['t1', 't2'])
+  } finally { app.unmount(); clock.restore() }
+})
+
+test('远程延迟刷新在切查询、隐藏及卸载时取消，迟到提交不改变新查询', async () => {
+  for (const change of ['query', 'hide', 'unmount', 'late-submit']) {
+    const clock = projectClock(), pending = deferred(), calls = []
+    globalThis.fetch = async url => {
+      calls.push(url)
+      if (url === '/task/list_dataset') return response({ ips: [] })
+      if (url === '/project/create_project') return change === 'late-submit' ? pending.promise :
+        response({ projectID: '7', keti: 'keti3', timestamp: 't', status: 'accepted' })
+      assert.fail(`不应自动查询：${url}`)
+    }
+    const { app, p, active } = mountedProject()
+    try {
+      await flushProject(); p.source.value = 'keti3'; p.projectID.value = '7'
+      const submit = p.submit()
+      if (change === 'late-submit') {
+        p.queryID.value = 'new'
+        pending.resolve(response({ projectID: '7', keti: 'keti3', timestamp: 't', status: 'accepted' }))
+      }
+      await submit
+      const lateTimer = [...clock.timers.values()][0]
+      if (change === 'query') p.queryID.value = 'new'
+      if (change === 'hide') { active.value = false; active.value = true }
+      if (change === 'unmount') app.unmount()
+      assert.equal(clock.timers.size, 0)
+      lateTimer?.(); await flushProject()
+      assert.equal(calls.length, 2)
+      if (change !== 'unmount') assert.equal(p.batches.value.length, 1)
+    } finally { app.unmount(); clock.restore() }
+  }
+})
+
+test('任务列表下载原因优先且 ready 不覆盖排队、完成及验证失败', async () => {
+  const { taskStatusLabel, batchStatusLabel } = await import(pathToFileURL(resolve(out, 'types.js')))
+  assert.equal(taskStatusLabel({ status: 'created', preparation_status: 'downloading' }), '下载中')
+  assert.equal(taskStatusLabel({ status: 'failed', verification_status: 'failed', preparation_status: 'failed', preparation_error: '文件下载失败：HTTP 404' }), '文件下载失败：HTTP 404')
+  for (const [status, expected] of [['queued', '排队中'], ['completed', '已完成'], ['failed', '失败']]) {
+    assert.equal(taskStatusLabel({ status, preparation_status: 'ready' }), expected)
+  }
+  assert.match(batchStatusLabel('empty'), /项目为空/)
+})
+
+test('批次提示仅以真实 taskID 为前缀，多任务用顿号连接，暂无 ID 只显示状态原因', async () => {
+  const originalDocument = globalThis.Document, originalShadowRoot = globalThis.ShadowRoot
+  globalThis.Document = class {}; globalThis.ShadowRoot = class {}
+  const clock = projectClock(), rootElement = {}
+  let serial = 0
+  const batches = [
+    { timestamp: 'timestamp-1', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-one' }] },
+    { timestamp: 'timestamp-2', status: 'failed', error: '输入下载失败', tasks: [{ task_id: 'task-two' }, { task_id: 'task-three' }] },
+    { timestamp: 'timestamp-3', status: 'failed', error: '项目打包失败' },
+    { timestamp: 'timestamp-4', status: 'empty', tasks: [] },
+  ]
+  globalThis.fetch = async url => {
+    if (url === '/task/list_dataset') return response({ ips: [] })
+    if (url === '/project/create_project') return response({ projectID: 'source-project', keti: 'keti3', timestamp: `timestamp-${++serial}`, status: 'accepted' })
+    if (url.startsWith('/task/list_tasks')) return response({ tasks: [] })
+    if (url.startsWith('/project/get_progress')) return response({ batches: [{ timestamp: 'historical', status: 'failed', tasks: [{ task_id: 'historical-task' }] }, ...batches] })
+    assert.fail(url)
+  }
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  const text = node => (node.text === 'v-if' ? '' : node.text || '') + (node.children || []).map(text).join('')
+  const hints = () => nodes().find(n => n.props?.['aria-label'] === '本次会话提交批次').children
+    .filter(n => n.tag === 'p').map(n => text(n).trim())
+  const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: true }) } })
+  try {
+    app.mount(rootElement); await flushProject()
+    nodes().find(n => n.props?.id === 'project-source').props['onUpdate:modelValue']('keti3'); await nextTick()
+    nodes().find(n => n.props?.id === 'project-id').props['onUpdate:modelValue']('source-project'); await nextTick()
+    for (let i = 0; i < 4; i++) {
+      nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
+      await flushProject()
+    }
+    assert.deepEqual(hints(), Array(4).fill('已接受，等待下载'))
+    nodes().find(n => n.tag === 'button' && n.text === '查询').parent.props.onSubmit({ preventDefault() {} })
+    await flushProject()
+    assert.deepEqual(hints(), [
+      'task-one：失败；输入下载失败',
+      'task-two、task-three：失败；输入下载失败',
+      '失败；项目打包失败',
+      '项目为空，没有可验证的 IP',
+    ])
+    for (const hint of hints()) assert.doesNotMatch(hint, /keti3|source-project|timestamp-|historical-task|undefined/)
+  } finally { app.unmount(); clock.restore(); globalThis.Document = originalDocument; globalThis.ShadowRoot = originalShadowRoot }
 })
