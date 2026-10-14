@@ -25,13 +25,15 @@ def instructions(directory, ip_name, tool, keti, userprompt):
 
 待验证的 IP：{ip_name}
 使用的验证工具：{tool}
+验证任务的工作目录是：`{directory / "workspace"}`
 
 待验证的 IP 相关文件位于 `{directory / "input"}`
 > 待验证的 IP 相关文件实际拷贝自其他目录或下载自网络，若需要查明，详见 `{directory / "files.csv"}`
 
 要求：
-- 不要读写未提及的其他目录中的文件
+- 不要读写未提及的其他目录中的文件；禁止修改工作目录意外的文件
 - 争取在一轮对话内完成任务，不限制工具调用次数
+- 执行全面、完整、严格的验证，给出有效的验证结论
 - 只有生成最终验证结果报告，任务才算完成。完成任务后，只需在会话中答复【任务已完成】
 </task_prompt>
 """
