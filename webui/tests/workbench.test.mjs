@@ -47,8 +47,8 @@ const waitFor = async predicate => {
 }
 after(async () => { globalThis.fetch = originalFetch; globalThis.window = originalWindow; await rm(out, { recursive: true, force: true }) })
 
-test('metadata prompt appears once; cumulative snapshots replace deltas; thinking stays plaintext', () => {
-  const state = initialConversation('原始提示词')
+test('真实 RPC 首消息仅出现一次，快照替换增量，思考保持纯文本', () => {
+  const state = initialConversation()
   applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: '原始提示词' } }))
   applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '原始提示词' } }))
   applyTaskEvent(state, rpc({ type: 'agent_start' }))
@@ -143,7 +143,7 @@ function mountedWorkbench() {
   return { app, w: workbench }
 }
 
-test('initial selection, A→B switch aborts old subscription; no cross-talk or duplicate prompt', async () => {
+test('切换任务取消旧订阅、不串话，metadata 不注入首消息', async () => {
   const streams = new Map()
   const detail = id => ({ task: { task_id: id, prompt: `prompt-${id}`, status: 'running', created_at: '' }, files: [{ path: `${id}/report.html`, kind: 'report_html', size: 20 }] })
   globalThis.fetch = async (url, options) => {
@@ -158,6 +158,7 @@ test('initial selection, A→B switch aborts old subscription; no cross-talk or 
     await w.initialize()
     await waitFor(() => streams.has('A'))
     assert.equal(w.selectedId.value, 'A')
+    assert.deepEqual(w.messages.value, [])
     const selectingB = w.selectTask('B')
     await waitFor(() => streams.has('B'))
     assert.equal(streams.get('A').signal.aborted, true)
@@ -165,8 +166,8 @@ test('initial selection, A→B switch aborts old subscription; no cross-talk or 
     const send = (id, text) => streams.get(id).c.enqueue(new TextEncoder().encode(JSON.stringify(rpc({ type: 'message_start', message: assistant(text) })) + '\n'))
     send('A', '过期的 A 输出')
     send('B', 'B 输出')
-    await waitFor(() => w.messages.value.length === 2)
-    assert.deepEqual(w.messages.value.map(m => m.text), ['prompt-B', 'B 输出'])
+    await waitFor(() => w.messages.value.length === 1)
+    assert.deepEqual(w.messages.value.map(m => m.text), ['B 输出'])
     assert.equal(w.files.value[0].path, 'B/report.html')
     app.unmount()
     streams.get('B').c.close()
@@ -193,11 +194,14 @@ test('closed stream retries metadata race; uses final metadata status and files'
     assert.equal(w.task.value.status, 'completed')
     assert.equal(w.files.value[0].path, 'report.html')
     assert.ok(listReads >= 2)
-    assert.equal(w.messages.value.length, 1)
+    assert.equal(w.messages.value.length, 0)
   } finally { app.unmount() }
 })
 
 test('components preserve sandbox and pure text rendering', async () => {
+  const conversation = await readFile(resolve(root, 'src/components/ConversationPanel.vue'), 'utf8')
+  assert.match(conversation, /!messages.length[^>]*>未开始/)
+  assert.match(conversation, /等待 Agent 输出/)
   const artifacts = await readFile(resolve(root, 'src/components/ArtifactPanel.vue'), 'utf8')
   const message = await readFile(resolve(root, 'src/components/MessageItem.vue'), 'utf8')
   assert.equal((artifacts.match(/sandbox="allow-scripts"/g) || []).length, 2)
@@ -391,7 +395,7 @@ test('删当前任务阻止重复点击、断订阅、清视图并选择剩余�
     assert.equal(f.w.selectedId.value, 'B')
     assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['B'])
     assert.equal(f.w.task.value.task_id, 'B')
-    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-B'])
+    assert.deepEqual(f.w.messages.value.map(m => m.text), [])
     assert.equal(f.w.detailError.value, '')
     assert.equal(f.w.streamError.value, '')
     f.streams[0].c.enqueue(new TextEncoder().encode(JSON.stringify(rpc({ type: 'message_start', message: assistant('旧输出') })) + '\n'))
@@ -401,7 +405,7 @@ test('删当前任务阻止重复点击、断订阅、清视图并选择剩余�
     freshList.resolve(response({ tasks: [f.task('A'), f.task('B')] }))
     await deleting
     assert.deepEqual(f.w.tasks.value.map(t => t.task_id), ['B'])
-    assert.deepEqual(f.w.messages.value.map(m => m.text), ['prompt-B'])
+    assert.deepEqual(f.w.messages.value.map(m => m.text), [])
     assert.equal(f.streams[1].signal.aborted, false)
   } finally { f.close() }
 })
@@ -615,7 +619,7 @@ function mountedProject(onForced) {
   return { app, p: project, active }
 }
 test('多轮显式 user 全量重放，event_id 去重，同文本不同轮和同轮均保留', () => {
-  const state = initialConversation('初始')
+  const state = initialConversation()
   const events = [
     { type: 'user', message: '初始', turn_id: 1, event_id: 1 },
     { ...rpc({ type: 'message_start', message: assistant('') }), turn_id: 1, event_id: 2 },
@@ -630,19 +634,38 @@ test('多轮显式 user 全量重放，event_id 去重，同文本不同轮和�
   assert.deepEqual(state.items.filter(m => m.kind === 'user').map(m => m.turnId), [1, 2, 3, 3])
 })
 
-test('legacy RPC user start/end、首 prompt 与显式消息混合不重复，后续用户不丢', () => {
+test('初始 RPC 原文保留前缀，后续显式输入与 RPC 配对，不合并重复主动输入', () => {
   for (const explicitFirst of [false, true]) {
-    const state = initialConversation('原提示')
-    const explicit = { type: 'user', message: '原提示', turn_id: 1, event_id: 1 }
-    if (explicitFirst) applyTaskEvent(state, explicit)
-    applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: '工作目录和 skill 前缀 原提示' } }))
-    applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '工作目录和 skill 前缀 原提示' } }))
-    if (!explicitFirst) applyTaskEvent(state, explicit)
+    const state = initialConversation()
+    const original = '工作目录和 skill 前缀 原提示'
+    assert.deepEqual(state.items, [])
+    applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: original } }))
+    applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: original } }))
     applyTaskEvent(state, rpc({ type: 'message_end', message: assistant('第一轮') }))
-    applyTaskEvent(state, rpc({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: '补充' }] } }))
-    applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '补充' } }))
-    assert.deepEqual(state.items.map(m => m.text), ['原提示', '第一轮', '补充'])
+    const explicit = { type: 'user', message: '补充', turn_id: 2, event_id: 1 }
+    if (explicitFirst) applyTaskEvent(state, explicit)
+    applyTaskEvent(state, { ...rpc({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: '补充' }] } }), turn_id: 2 })
+    applyTaskEvent(state, { ...rpc({ type: 'message_end', message: { role: 'user', content: '补充' } }), turn_id: 2 })
+    if (!explicitFirst) applyTaskEvent(state, explicit)
+    applyTaskEvent(state, { ...explicit, event_id: 2 })
+    applyTaskEvent(state, { ...rpc({ type: 'message_start', message: { role: 'user', content: '补充' } }), turn_id: 2 })
+    applyTaskEvent(state, { ...rpc({ type: 'message_end', message: { role: 'user', content: '补充' } }), turn_id: 2 })
+    assert.deepEqual(state.items.map(m => m.text), [original, '第一轮', '补充', '补充'])
   }
+})
+
+test('初始 RPC 后主动发送同文输入不被误合并', () => {
+  const state = initialConversation()
+  applyTaskEvent(state, { ...rpc({ type: 'message_end', message: { role: 'user', content: '相同输入' } }), turn_id: 1 })
+  applyTaskEvent(state, { ...rpc({ type: 'message_start', message: assistant('回复') }), turn_id: 1 })
+  applyTaskEvent(state, { type: 'user', message: '相同输入', turn_id: 1, event_id: 1 })
+  assert.deepEqual(state.items.map(m => m.text), ['相同输入', '回复', '相同输入'])
+})
+
+test('只有 user message_end 时仍以原文创建首消息', () => {
+  const state = initialConversation()
+  applyTaskEvent(state, rpc({ type: 'message_end', message: { role: 'user', content: '<skill>完整展开</skill>\n工作目录\n真实输入' } }))
+  assert.equal(state.items[0].text, '<skill>完整展开</skill>\n工作目录\n真实输入')
 })
 
 test('不同轮助手流与同名工具隔离，旧轮迟到输出不拼入新轮', () => {

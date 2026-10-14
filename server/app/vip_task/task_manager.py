@@ -49,8 +49,6 @@ class TaskManager:
         metadata_path = task.task_dir / 'task.json'
         metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
         task.turn_id += 1
-        if not task.chat_mode and not task.events:
-            task.write_event({'type': 'user', 'message': task.prompt})
         metadata['turn_id'] = task.turn_id
         metadata['status'] = 'queued'
         metadata['chatstatus'] = 'queued'

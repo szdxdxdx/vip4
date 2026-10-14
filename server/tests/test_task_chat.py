@@ -84,6 +84,59 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             while task.agent is None or not task.agent.commands:
                 await asyncio.sleep(.001)
         return task.agent
+    async def test_initial_queue_and_running_wait_for_real_rpc(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original = '<skill name="verify-ip">完整展开</skill>\n工作目录前缀\n真实初始输入'
+        async def events(task, prompt):
+            entered.set()
+            await release.wait()
+            yield {'type': 'message_start', 'message': {'role': 'user', 'content': original}}
+            yield {'type': 'message_end', 'message': {'role': 'user', 'content': original}}
+        with patch.object(Task, '_agent_events', events):
+            self.manager.create_task('initial', '仅配置提示词')
+            task = self.manager.tasks['initial']
+            self.assertEqual(task.events, [])
+            await entered.wait()
+            self.assertEqual(task.events, [])
+            self.assertEqual(task.get_task()['task']['prompt'], '仅配置提示词')
+            release.set()
+            await task.job
+        records = [json.loads(line) for line in task.events]
+        self.assertEqual(records[0]['data']['message']['content'], original)
+        self.assertFalse(any(e['type'] == 'user' for e in records))
+
+    async def test_initial_mock_rpc_is_recorded_and_replayed(self):
+        self.manager.create_task('initial', '真实验证输入')
+        task = self.manager.tasks['initial']
+        await task.job
+        records = [json.loads(line) async for line in task.get_events()]
+        self.assertEqual(records[0]['type'], 'agent')
+        self.assertEqual(records[0]['data']['message']['content'][0]['text'], MockPi.instances[0].commands[0][1]['message'])
+        self.assertEqual(Task('initial').events, task.events)
+
+    async def test_session_user_content_is_not_trimmed(self):
+        task = await self.ready()
+        skill_file = self.root / 'verify-ip' / 'SKILL.md'
+        text = (f'<skill name="verify-ip" location="{skill_file}">\n完整 SKILL\n</skill>\n\n'
+                f'工作目录为 {task.task_dir / "workspace"}\n\n原始验证输入')
+        content = [{'type': 'text', 'text': text}, {'type': 'image', 'data': '真实图片', 'mimeType': 'image/png'}]
+        records = [{'type': 'session', 'id': 'session'},
+                   {'type': 'message', 'id': 'u', 'parentId': None,
+                    'message': {'role': 'user', 'content': content}}]
+        session = task.task_dir / 'pi_session' / 'conversation.jsonl'
+        session.write_text(''.join(json.dumps(e, ensure_ascii=False) + '\n' for e in records))
+        task.prompt = ''
+        with patch('app.vip_task.config.VIP_SKILL_DIR', self.root):
+            history = task.read_history()
+            self.assertEqual(history.prompt, '原始验证输入')
+            self.assertEqual(task.get_prompt(), '原始验证输入')
+            replay = [json.loads(line) async for line in task.get_events()]
+        self.assertEqual(replay[0]['data']['message']['content'], content)
+        self.assertEqual(len(replay), 1)
+        session.write_text(json.dumps(records[0]) + '\n')
+        self.assertEqual(task.read_history().events, [])
+
     async def test_multiturn_replay_idle(self):
         task = await self.ready()
         for text in ['第一轮', '第二轮']:

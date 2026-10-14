@@ -42,7 +42,7 @@ const streamLabels: Record<string, string> = { idle: '未连接', connecting: '�
       </div>
       <template v-else>
         <MessageItem v-for="message in messages" :key="message.id" :message="message" />
-        <p v-if="!messages.length" class="empty small">暂无历史消息</p>
+        <p v-if="!messages.length" class="empty small">未开始</p>
         <p v-if="streamState === 'connecting'" class="waiting">等待 Agent 输出，任务可能仍在准备中…</p>
       </template>
     </div>

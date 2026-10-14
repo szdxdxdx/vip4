@@ -110,7 +110,7 @@ export function useWorkbench() {
       if (version !== generation || current.signal.aborted) return
       task.value = result.task
       files.value = result.files
-      conversation.value = initialConversation(result.task.prompt)
+      conversation.value = initialConversation()
       detailLoading.value = false
     } catch (error) {
       if (version !== generation || current.signal.aborted) return

@@ -20,8 +20,8 @@ function output(value: unknown): string {
   }).join('\n'))
   return truncate(stringify(value))
 }
-export function initialConversation(prompt = ''): ConversationState {
-  return { items: prompt ? [{ id: 'prompt', kind: 'user', text: prompt, userSource: 'fallback' }] : [], nextId: 0, seenEvents: new Set(), assistants: {}, activeUser: null, userCount: 0, legacyFirstSeen: false }
+export function initialConversation(): ConversationState {
+  return { items: [], nextId: 0, seenEvents: new Set(), assistants: {}, activeUser: null }
 }
 function add(state: ConversationState, message: Omit<ChatMessage, 'id'>): ChatMessage {
   const item = { ...message, id: `event-${state.nextId++}` }
@@ -46,28 +46,23 @@ function userText(content: unknown): string {
   return Array.isArray(content) ? content.filter(b => record(b).type === 'text').map(b => stringify(record(b).text)).join('') : stringify(content)
 }
 function user(state: ConversationState, text: string, turnId: number | undefined, source: 'explicit' | 'legacy', ending = false) {
-  // RPC start/end 是同一条消息；显式 user 与旧 RPC 历史交叠时优先显式消息。
+  // start/end 合并一条 RPC 消息；显式输入只与尚未确认的同文 RPC 配对。
   const active = state.items.find(m => m.id === state.activeUser)
-  if (source === 'legacy' && ending && active) { state.activeUser = null; return }
-  if (source === 'legacy' && !state.legacyFirstSeen) {
-    state.legacyFirstSeen = true
-    const first = state.items.find(m => m.id === 'prompt' && m.userSource === 'explicit')
-    if (first && (turnId === undefined || turnId === first.turnId) && first.text &&
-      (text === first.text || text.endsWith(first.text))) { state.activeUser = ending ? null : first.id; return }
+  if (source === 'legacy' && ending && active) {
+    if (active.userSource === 'legacy') active.text = text
+    state.activeUser = null
+    return
   }
-  const duplicate = state.items.find(m => m.kind === 'user' && m.text === text &&
-    (m.turnId === turnId || (m.id === 'prompt' && m.turnId === undefined)) && m.userSource === (source === 'explicit' ? 'legacy' : 'explicit'))
-  if (duplicate) { if (source === 'explicit') { duplicate.userSource = source; duplicate.turnId = turnId } return }
-  const fallback = state.items.find(m => m.userSource === 'fallback')
+  const duplicate = state.items.find((m, index) => m.kind === 'user' && m.text === text &&
+    (m.turnId === turnId || m.turnId === undefined || turnId === undefined) &&
+    m.userSource !== source && !m.userConfirmed &&
+    (source !== 'explicit' || !state.items.slice(index + 1).some(item => item.kind !== 'user')))
   let item: ChatMessage
-  if (!state.userCount && fallback) {
-    item = fallback
-    // 旧 RPC 首 prompt 可能带工作目录和 skill 前缀，保留 metadata 原文。
-    if (source === 'explicit') item.text = text
-    item.turnId = turnId
-    item.userSource = source
+  if (duplicate) {
+    item = duplicate
+    item.userConfirmed = true
+    if (source === 'explicit') { item.userSource = source; item.turnId = turnId }
   } else item = add(state, { kind: 'user', text, turnId, userSource: source })
-  state.userCount++
   state.activeUser = source === 'legacy' && !ending ? item.id : null
 }
 export function applyTaskEvent(state: ConversationState, wrapper: TaskEvent): void {

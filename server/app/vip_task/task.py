@@ -149,11 +149,12 @@ class Task:
             # 首条 prompt 与同文 followUp 分开确认，不能一次删掉两条。
             self.unconfirmed_prompt = None
             self.inflight = []
-            return
+            return self.chat_mode
         for index, message in enumerate(self.pending):
             if prompt_key(message) == key:
                 self.pending.pop(index)
-                return
+                return True
+        return False
 
     def set_status(self, status):
         path = self.task_dir / 'task.json'
@@ -462,6 +463,7 @@ class Task:
 
     async def _agent_events(self, prompt: str):
         agent = None
+        explicit_user = False
         try:
             agent = self._create_agent()
             self.agent = agent
@@ -477,7 +479,7 @@ class Task:
                 while True:
                     event = await agent.events.get()
                     if event.get('type') == 'message_start' and event.get('message', {}).get('role') == 'user':
-                        self.confirm_user(event['message'].get('content'))
+                        explicit_user = self.confirm_user(event['message'].get('content'))
                     if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant':
                         message = event['message']
                     if event.get('type') == 'agent_settled':
@@ -493,7 +495,9 @@ class Task:
                             yield {'type': 'error', 'error': 'Pi 未能生成回复'}
                         yield event
                         return
-                    yield event
+                    # 主动发送的输入已即时入日志；初始消息只采用 Pi 原文。
+                    if event.get('message', {}).get('role') != 'user' or not explicit_user:
+                        yield event
                     if event.get('type') == 'error':
                         return
         except (TimeoutError, OSError, RuntimeError, ValueError):
@@ -503,6 +507,7 @@ class Task:
             if agent is not None:
                 # 取消也须等待 abort 和进程释放后才能释放全局资源锁。
                 async def cleanup():
+                    nonlocal explicit_user
                     try:
                         if not agent.settled:
                             await agent.abort()
@@ -512,8 +517,8 @@ class Task:
                         while not agent.events.empty():
                             event = agent.events.get_nowait()
                             if event.get('type') == 'message_start' and event.get('message', {}).get('role') == 'user':
-                                self.confirm_user(event['message'].get('content'))
-                            elif event.get('message', {}).get('role') != 'user':
+                                explicit_user = self.confirm_user(event['message'].get('content'))
+                            if event.get('message', {}).get('role') != 'user' or not explicit_user:
                                 self.write_event({'type': 'agent', 'data': event})
                 operation = asyncio.create_task(cleanup())
                 try:
@@ -541,14 +546,11 @@ class Task:
         before = {str(p): (p.stat().st_mtime_ns, p.stat().st_size)
                   for p in (task_dir / 'workspace').glob('*_suite/output/report.*')}
         write = self.write_event
-        if not self.chat_mode and not self.events:
-            write({'type': 'user', 'message': self.prompt})
 
         try:
             async with aclosing(self._agent_events(prompt)) as events:
                 async for event in events:
-                    if event.get('message', {}).get('role') != 'user':
-                        write({'type': 'agent', 'data': event})
+                    write({'type': 'agent', 'data': event})
                     if event.get('type') == 'error':
                         status = 'failed'
             if status != 'failed':

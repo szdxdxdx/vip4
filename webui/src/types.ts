@@ -21,7 +21,8 @@ export interface ChatMessage {
   kind: 'user' | 'assistant' | 'tool' | 'error'
   text: string
   turnId?: number
-  userSource?: 'fallback' | 'explicit' | 'legacy'
+  userSource?: 'explicit' | 'legacy'
+  userConfirmed?: boolean
   thinking?: string
   toolCallId?: string
   toolName?: string
@@ -35,8 +36,6 @@ export interface ConversationState {
   seenEvents: Set<number>
   assistants: Record<string, string | null>
   activeUser: string | null
-  userCount: number
-  legacyFirstSeen: boolean
 }
 export type TaskEvent = ({ type: 'agent'; data: Record<string, unknown> } | { type: 'error'; error: unknown } | { type: 'user'; message: unknown } | { type: 'status'; status: string }) & { turn_id?: number; event_id?: number }
 export const isTerminal = (status: string) => ['idle', 'paused', 'completed', 'failed', 'error', 'cancelled', 'canceled', 'done', 'finished'].includes(status)

@@ -92,25 +92,23 @@ def read_history(task_dir: Path, skill_file: Path) -> SessionHistory:
                 continue
             message = entry['message']
             role, content = message['role'], message['content']
-            if role == 'user' and first_user:
-                first_user = False
-                text = content if isinstance(content, str) else ''.join(
-                    block['text'] for block in content
-                    if isinstance(block, dict) and block.get('type') == 'text'
-                    and isinstance(block.get('text'), str)
-                )
-                workspace_prefix = f'工作目录为 {task_dir / "workspace"}\n\n'
-                skill_prefix = f'<skill name="verify-ip" location="{skill_file}">\n'
-                if text.startswith(skill_prefix):
-                    end = text.find('\n</skill>\n\n', len(skill_prefix))
-                    if end != -1 and text[end + len('\n</skill>\n\n'):].startswith(workspace_prefix):
-                        text = text[end + len('\n</skill>\n\n'):]
-                if text.startswith(workspace_prefix):
-                    text = text[len(workspace_prefix):]
-                history.prompt = text
-                history.events.append({'type': 'user', 'message': text})
-            elif role == 'user':
-                history.events.append({'type': 'user', 'message': message_text(content)})
+            if role == 'user':
+                if first_user:
+                    first_user = False
+                    text = message_text(content)
+                    workspace_prefix = f'工作目录为 {task_dir / "workspace"}\n\n'
+                    skill_prefix = f'<skill name="verify-ip" location="{skill_file}">\n'
+                    if text.startswith(skill_prefix):
+                        end = text.find('\n</skill>\n\n', len(skill_prefix))
+                        if end != -1 and text[end + len('\n</skill>\n\n'):].startswith(workspace_prefix):
+                            text = text[end + len('\n</skill>\n\n'):]
+                    if text.startswith(workspace_prefix):
+                        text = text[len(workspace_prefix):]
+                    history.prompt = text
+                # 会话原始内容用于回放，prompt 的还原仅用于内部配置。
+                history.events.append({'type': 'agent', 'data': {
+                    'type': 'message_end', 'message': message,
+                }})
             elif role == 'assistant':
                 history.events.append({'type': 'agent', 'data': {
                     'type': 'message_end', 'message': message,
