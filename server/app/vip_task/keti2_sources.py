@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
-from . import config as settings
+from . import config
 
 logger = logging.getLogger(__name__)
 FIELDS = (
@@ -24,9 +24,9 @@ FIELDS = (
 
 @dataclass
 class Keti2Config:
-    search_url: str = field(default_factory=lambda: settings.KETI2_SEARCH_URL)
+    search_url: str = field(default_factory=lambda: f'{config.KETI2_BASE_URL}/api/search/searchSoftwareIPByProjectId')
     path_map: dict[str, str] = field(default_factory=dict)
-    download_url: str = field(default_factory=lambda: settings.KETI2_DOWNLOAD_URL)
+    download_url: str = field(default_factory=lambda: f'{config.KETI2_BASE_URL}/api/file/downloadFile')
     timeout: float = 30
 
     @classmethod

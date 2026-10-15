@@ -420,7 +420,7 @@ class Task:
                 agent_config.PI_EXECUTABLE,
                 '--mode', 'rpc',
                 '--session', str(self.session_path()),
-                '--tools', config.PI_TOOLS,
+                '--tools', 'read,bash,edit,write,grep,find,ls',
                 '--no-extensions',
                 '--no-approve',
                 '--no-skills',
@@ -468,7 +468,7 @@ class Task:
             agent = self._create_agent()
             self.agent = agent
             await agent.start_reader()
-            async with asyncio.timeout(config.PI_TIMEOUT):
+            async with asyncio.timeout(None):
                 self.unconfirmed_prompt = prompt_key(prompt)
                 result = await agent.rpc('prompt', message=prompt)
                 if result.get('disposition') == 'handled':
