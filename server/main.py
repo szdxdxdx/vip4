@@ -7,10 +7,12 @@ import uvicorn
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.service import config
 from app.service.api import router as task_router
 from app.service.project_api import router as project_router
+from app.service.config_api import router as config_router
 from app.vip_task.task_manager import TaskManager
 from app.vip_task.project import ProjectManager
 
@@ -35,6 +37,7 @@ def create_app(backend_only: bool = False) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(task_router)
     app.include_router(project_router)
+    app.include_router(config_router)
 
     @app.middleware('http')
     async def log_request(request, call_next):
@@ -51,6 +54,10 @@ def create_app(backend_only: bool = False) -> FastAPI:
                         (perf_counter() - started) * 1000)
 
     if not backend_only:
+        @app.get('/config/pi-models', include_in_schema=False)
+        async def pi_models_page():
+            return FileResponse(config.VIP_WEBUI_DIST_DIR / 'index.html')
+
         app.mount("/", StaticFiles(directory=config.VIP_WEBUI_DIST_DIR, html=True))
     return app
 

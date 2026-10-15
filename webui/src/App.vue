@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PiModelsPage from './components/PiModelsPage.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import ConversationPanel from './components/ConversationPanel.vue'
@@ -6,6 +7,7 @@ import ArtifactPanel from './components/ArtifactPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ProjectPanel from './components/ProjectPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
+const isPiModelsPage = window.location.pathname === '/config/pi-models'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
   listError, detailError, streamError, deletingId, deleteError, removeTask, refreshTasks, selectTask,
   draft, chatBusy, chatError, canSend, canPause, sendMessage, pauseTask,
@@ -37,10 +39,11 @@ const views = [
   { id: 'files', label: '文件下载' },
 ] as const
 watch(selectedId, () => { activeView.value = 'conversation' }, { flush: 'sync' })
-onMounted(initialize)
+onMounted(() => { if (!isPiModelsPage) initialize() })
 </script>
 <template>
-  <div class="workbench">
+  <PiModelsPage v-if="isPiModelsPage" />
+  <div v-else class="workbench">
     <header class="app-header">
       <h1>软件IP验证</h1>
       <nav class="mode-controls" aria-label="验证模式">
