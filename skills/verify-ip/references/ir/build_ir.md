@@ -6,9 +6,10 @@
 
 ```
 <verify_ip_workspace>/
-|   ir/                  # IR 存放目录
-|   |   ip.json          # 记录待验证 IP 的基本信息
-|   |   contract.json    # 前后置断言，描述 IP 的行为约束
+|   ir/
+|   |   ip.json          # 待验证 IP 基本信息
+|   |   cases_tmpl.c     # 全部待验证性质（模板）
+|   |   contract.json    # 由 LaTeX 格式的形式模型转换而来的 JSON AST
 |   |   error_report.md  # 当 IR 构建失败时，生成的错误报告
 |   tmp/
 ```
@@ -23,21 +24,27 @@
   "ip": <str>
 }
 ```
-字段说明：
-- `ip` 填写待验证 IP 的名称
+`ip` 填写待验证 IP 的名称。
 
-### step-2 结构化形式规约
+### step-2 转换形式模型
 
-软件 IP 形式模型规约文档用数学语言形式化描述了 IP 行为，由 LaTeX 编写，编译生成的 PDF 便于人类专家阅读，
-但文档内容缺乏统一的标准化格式要求，无法通过常规脚本进行自动化解析。
-因此，需要将 LaTeX 内容进行结构化，转换为适合机器解析的 JSON 格式，该步骤只能依赖人工理解分析，
-详见 `<skill>/references/ir/json_ast.md`
+将形式模型转换成待验证的性质模板 `cases_tmpl.c`。根据实际形式模型的内容格式，选择合适的转换方式：
+
+- 如果形式模型是 LaTeX 文档，用数学公式描述 IP 的行为，
+  1. 根据 `<skill>/references/ir/latex_to_json_ast.md`，
+     将 LaTeX 文档转换为 JSON AST，生成 `contract.json`，
+  2. 使用 `<skill>/scripts/ir/make_cases_tmpl.py` 生成 `cases_tmpl.c`
+     参数 `--ir <ir>` 指定 IR 目录
+
+- 如果形式模型不是 LaTeX 文档，而是其他格式的文档，
+  根据 `<skill>/references/ir/other_format_to_cases_tmpl.md`，
+  直接理解全部形式模型并生成 `cases_tmpl.c`，不创建或依赖 `contract.json`。
 
 ### step-3 检查 IR
 
 使用 `<skill>/scripts/ir/check_ir.py` 检查 IR 格式是否有误
 参数 `--ir <ir>` 指定 IR 目录
-脚本将同时检查上述步骤提到的所有产物，结果输出到 stdout
+脚本将同时检查上述步骤提到的所有产物，结果输出到 stdout，不用保存到文件中。
 
 ## 异常处理
 

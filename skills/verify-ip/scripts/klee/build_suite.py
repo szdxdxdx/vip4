@@ -8,7 +8,7 @@ from core.klee.build_suite import build_suite
 
 def main() -> int:
     parser = ArgumentParser(description="构建 KLEE 验证套件")
-    parser.add_argument("--ir", type=Path, required=True, help="IR 目录（含 contract.json）")
+    parser.add_argument("--ir", type=Path, required=True, help="IR 目录")
     parser.add_argument("--suite", type=Path, required=True, help="KLEE 验证套件输出目录")
     args = parser.parse_args()
     build_suite(ir_dir=args.ir, suite_dir=args.suite)

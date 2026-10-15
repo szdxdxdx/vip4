@@ -1,13 +1,17 @@
 import json
+import shutil
 from pathlib import Path
 
-from core.ir.make_cases_tmpl import make_cases_tmpl
+from core.ir.check_ir import check_ir
 from core.utils import current_datetime_str, ensure_output_dir
 
 
 def build_suite(*, ir_dir: Path, suite_dir: Path):
     ir_dir = ir_dir.resolve()
     suite_dir = suite_dir.resolve()
+    errors = check_ir(ir_dir)
+    if errors:
+        raise RuntimeError("IR 检查失败，无法构建验证套件")
     ensure_output_dir(suite_dir)
 
     with open(ir_dir / "ip.json", encoding="utf-8") as f:
@@ -21,8 +25,6 @@ def build_suite(*, ir_dir: Path, suite_dir: Path):
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
-    tmpl_text = make_cases_tmpl(ir_dir)
-    with open(suite_dir / "cases_tmpl.c", "w", encoding="utf-8") as f:
-        f.write(tmpl_text)
+    shutil.copyfile(ir_dir / "cases_tmpl.c", suite_dir / "cases_tmpl.c")
 
     print(f"[INFO] 验证套件已生成：{suite_dir}")

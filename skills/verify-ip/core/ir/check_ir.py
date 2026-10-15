@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from core.ir.check_ast import check_ast
 
 
 def check_ip_json(ir_dir: Path) -> list[str]:
@@ -32,7 +31,8 @@ def check_ir(ir_dir: Path) -> list[str]:
 
     errors = []
     errors.extend(check_ip_json(ir_dir))
-    errors.extend(check_ast(ir_dir))
+    if not (ir_dir / "cases_tmpl.c").is_file():
+        errors.append("cases_tmpl.c 文件不存在")
 
     if errors:
         for error in errors:
