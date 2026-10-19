@@ -5,7 +5,7 @@ import { atticalPrompt } from '../templates/attical'
 import { taskStatusLabel } from '../types'
 const props = defineProps<{ active: boolean }>()
 const emit = defineEmits<{ viewTask: [id: string]; changed: [] }>()
-const { messages, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, busy,
+const { keti5, messages, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, busy,
   loading, submit, refresh } = useProject(toRef(props, 'active'), () => emit('changed'))
 const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID.value.trim())
 </script>
@@ -29,7 +29,7 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
         </template>
         <template v-else>
           <label for="project-id">项目 ID</label>
-          <input id="project-id" v-model="projectID" autocomplete="off" placeholder="输入 projectID" />
+          <input id="project-id" v-model="projectID" :readonly="!!keti5" autocomplete="off" placeholder="输入 projectID" />
         </template>
         <label for="verify-tool">验证工具</label>
         <select id="verify-tool" v-model="tool">

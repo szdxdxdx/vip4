@@ -11,7 +11,7 @@ import { parse, compileScript } from '@vue/compiler-sfc'
 const root = resolve(import.meta.dirname, '..')
 await mkdir(resolve(root, 'node_modules/.tmp'), { recursive: true })
 const out = await mkdtemp(resolve(root, 'node_modules/.tmp/workbench-test-'))
-for (const file of ['projectTypes.ts', 'projectApi.ts', 'composables/useProject.ts', 'types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts', 'templates/attical.ts']) {
+for (const file of ['keti5.ts', 'projectTypes.ts', 'projectApi.ts', 'composables/useProject.ts', 'types.ts', 'api.ts', 'composables/eventReducer.ts', 'composables/useWorkbench.ts', 'templates/attical.ts']) {
   const source = await readFile(resolve(root, 'src', file), 'utf8')
   let code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
   code = code.replace(/from '(\.[^']+)'/g, "from '$1.js'")
@@ -20,7 +20,7 @@ for (const file of ['projectTypes.ts', 'projectApi.ts', 'composables/useProject.
   await writeFile(destination, code)
 }
 // 编译真实组件，用 Vue 内存渲染器检查视图切换，无浏览器依赖。
-for (const file of ['App.vue', ...['ProjectPanel', 'TaskSidebar', 'ConversationPanel', 'MessageItem', 'ArtifactPanel', 'ProgressPanel'].map(name => `components/${name}.vue`)]) {
+for (const file of ['App.vue', ...['PiModelsPage', 'FactoryUpload', 'ProjectPanel', 'TaskSidebar', 'ConversationPanel', 'MessageItem', 'ArtifactPanel', 'ProgressPanel'].map(name => `components/${name}.vue`)]) {
   const source = await readFile(resolve(root, 'src', file), 'utf8')
   const { descriptor } = parse(source)
   const script = compileScript(descriptor, { id: file, inlineTemplate: true })
@@ -38,6 +38,7 @@ const { useWorkbench } = await import(pathToFileURL(resolve(out, 'composables/us
 const { default: TaskSidebar } = await import(pathToFileURL(resolve(out, 'components/TaskSidebar.js')))
 const originalWindow = globalThis.window
 const originalFetch = globalThis.fetch
+globalThis.window = { location: { pathname: '/', search: '' } }
 const rpc = data => ({ type: 'agent', data })
 const assistant = (text, thinking = '') => ({ role: 'assistant', content: [{ type: 'text', text }, { type: 'thinking', thinking }] })
 const response = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })
@@ -1478,4 +1479,97 @@ test('消息区边框与独立滚动；对话间距紧凑且窄屏不放大，�
   assert.match(rules('.thinking pre')[0], /max-height:300px;\s*overflow:auto/)
   assert.match(rules('.tool-body pre')[0], /max-height:280px;\s*overflow:auto/)
   assert.match(rules('pre')[0], /white-space:pre-wrap;\s*overflow-wrap:anywhere/)
+})
+
+const { readKeti5 } = await import(pathToFileURL(resolve(out, 'keti5.js')))
+const { default: FactoryUpload } = await import(pathToFileURL(resolve(out, 'components/FactoryUpload.js')))
+const factoryParams = { projectId: ' 项目 A ', jobName: 'job', buildId: '01', toolName: 'factory-tool', executionId: 'exec' }
+const factorySearch = '?' + new URLSearchParams(factoryParams)
+test('工厂 URL 五项全有才生效，保留原字符串，缺失及空白全部忽略', () => {
+  assert.deepEqual(readKeti5(factorySearch), factoryParams)
+  for (const key of Object.keys(factoryParams)) {
+    const query = new URLSearchParams(factoryParams)
+    query.delete(key)
+    assert.equal(readKeti5('?' + query), null)
+    for (const empty of ['', '   ']) {
+      query.set(key, empty)
+      assert.equal(readKeti5('?' + query), null)
+    }
+  }
+})
+test('工厂参数仅远程提交携带，项目 ID 原样锁定，本地请求不携带', async () => {
+  globalThis.window = { location: { search: factorySearch } }
+  const requests = []
+  globalThis.fetch = async (url, options) => {
+    if (url === '/task/list_dataset') return response({ ips: [{ ip_name: 'AttiCal' }] })
+    requests.push({ url, body: JSON.parse(options.body) })
+    return response(url === '/task/create_task' ? { task_id: 'local' } : { projectID: factoryParams.projectId, keti: 'keti2', timestamp: 'now', status: 'accepted' })
+  }
+  const f = mountedProject()
+  try {
+    assert.equal(f.p.projectID.value, factoryParams.projectId)
+    f.p.ip.value = 'AttiCal'
+    await f.p.submit()
+    assert.equal('keti5' in requests[0].body, false)
+    for (const source of ['keti2', 'keti3']) {
+      f.p.source.value = source
+      f.p.projectID.value = '试图改写'
+      await f.p.submit()
+      const body = requests.at(-1).body
+      assert.equal(body.projectID, factoryParams.projectId)
+      assert.deepEqual(body.keti5, factoryParams)
+      assert.equal(body.tool, 'CBMC')
+    }
+  } finally { f.app.unmount(); globalThis.window = { location: { search: '' } } }
+})
+test('工厂上传：空参数禁用、状态优先、确认取消、防并发、重复上传及错误', async () => {
+  let confirmations = 0, calls = 0, complete
+  globalThis.window = { confirm: text => {
+    assert.equal(text, '当前上传的是中间结果而非完整结果，是否上传。')
+    confirmations++; return false
+  } }
+  globalThis.fetch = async (url, options) => {
+    calls++
+    assert.equal(url, '/task/upload_to_factory?task_id=A%20B')
+    assert.equal(options.method, 'POST')
+    return new Promise(resolve => { complete = resolve })
+  }
+  const props = reactive({ task: { task_id: 'A B', status: 'idle', keti5: null, keti5_upload_failed: true }, disabled: false })
+  const rootElement = {}, app = renderer.createApp({ render: () => h(FactoryUpload, props) })
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+  const nodes = () => descendants(rootElement)
+  const button = () => nodes().find(n => n.tag === 'button')
+  try {
+    app.mount(rootElement); await nextTick()
+    assert.equal(button().props.disabled, true)
+    assert.ok(nodes().some(n => n.text === '最近上传：失败'))
+    props.task.keti5 = factoryParams; await nextTick()
+    await button().props.onClick()
+    assert.equal(confirmations, 1); assert.equal(calls, 0)
+    globalThis.window.confirm = () => { confirmations++; return true }
+    const pending = button().props.onClick(); await nextTick()
+    assert.equal(button().props.disabled, true)
+    await button().props.onClick(); assert.equal(calls, 1)
+    complete(response({ success: true })); await pending; await nextTick()
+    assert.equal(button().props.disabled, false)
+    assert.ok(nodes().some(n => n.text === '最近上传：成功'))
+    for (const status of ['failed', 'cancelled', 'completed']) {
+      props.task.verification_status = status; props.task.status = 'running'
+      await nextTick()
+      const previous = confirmations, request = button().props.onClick()
+      complete(response({ success: true })); await request
+      assert.equal(confirmations, previous)
+    }
+    props.task.verification_status = 'paused'; props.task.status = 'completed'; await nextTick()
+    let request = button().props.onClick()
+    assert.equal(confirmations, 3)
+    complete(new Response(JSON.stringify({ detail: '工厂返回错误' }), { status: 502 }))
+    await request; await nextTick()
+    assert.ok(nodes().some(n => n.text === '工厂返回错误' && n.props?.role === 'alert'))
+    props.task.verification_status = 'idle'; await nextTick()
+    request = button().props.onClick()
+    assert.equal(confirmations, 4)
+    complete(response({ success: true })); await request; await nextTick()
+    assert.equal(button().props.disabled, false)
+  } finally { app.unmount() }
 })

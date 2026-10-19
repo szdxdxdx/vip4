@@ -33,6 +33,12 @@ export async function createTask(ipName: string, tool: string, userprompt: strin
 export async function deleteTask(id: string): Promise<void> {
   await checked(await fetch(`/task/delete_task?task_id=${encodeURIComponent(id)}`, { method: 'DELETE' }))
 }
+export async function uploadToFactory(id: string): Promise<void> {
+  const result = await (await checked(await fetch(`/task/upload_to_factory?task_id=${encodeURIComponent(id)}`, {
+    method: 'POST',
+  }))).json()
+  if (result.success !== true) throw new Error('上传失败：服务端未确认成功')
+}
 export function fileUrl(id: string, path: string, download = false) {
   return `/task/get_file?task_id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}&download=${download}`
 }

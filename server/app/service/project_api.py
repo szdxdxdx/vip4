@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
+from ..vip_task.keti5 import parameters
 from ..vip_task.project import ProjectConflictError, ProjectNotFoundError
 from .api import _read_task
 
@@ -16,11 +17,15 @@ class ProjectRequest(BaseModel):
     source: Literal['keti2', 'keti3'] = 'keti2'
     tool: Literal['CBMC', 'CPAchecker', 'KLEE'] = 'CBMC'
     userprompt: str | None = None
+    keti5: dict | None = None
 
     @model_validator(mode='after')
     def validate_source_id(self):
         if self.source == 'keti3' and not re.fullmatch(r'[1-9][0-9]*', self.projectID):
             raise ValueError('课题三 projectID 必须是正整数的字符串')
+        self.keti5 = parameters(self.keti5)
+        if self.keti5 is not None and self.keti5['projectId'] != self.projectID:
+            raise ValueError('keti5 projectId 与 projectID 不一致')
         return self
 
 
@@ -28,7 +33,7 @@ class ProjectRequest(BaseModel):
 async def create_project(body: ProjectRequest, request: Request):
     try:
         return await request.app.state.project_manager.submit(
-            body.projectID, body.userprompt, source=body.source, tool=body.tool)
+            body.projectID, body.userprompt, source=body.source, tool=body.tool, keti5=body.keti5)
     except ProjectConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
     except ValueError as error:

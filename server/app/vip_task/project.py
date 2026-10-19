@@ -9,6 +9,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 from . import config
+from .keti5 import Keti5, parameters
 from .timestamp import HISTORICAL_TIMESTAMP, new_timestamp
 from .keti2_sources import Keti2Sources
 from .keti3_sources import Keti3Sources
@@ -85,6 +86,8 @@ class ProjectManager:
         self.store = store or ProjectStore(Path(os.getenv(
             'VIP_PROJECT_DB', str(config.VIP_TASK_DIR.parent / 'projects.sqlite3'))))
         self.task_manager.store = self.store
+        self.keti5 = Keti5(self.store)
+        self.task_manager.keti5 = self.keti5
         self.projects: dict[ProjectKey, dict] = {}
         self.jobs: dict[ProjectKey, asyncio.Task] = {}
         # 映射写入及回滚同时失败时保留归属，供本进程查询及按任务删除。
@@ -93,7 +96,7 @@ class ProjectManager:
         self._close_job: asyncio.Task | None = None
 
     async def submit(self, project_id: str, prompt: str | None = None, *,
-                     source: Literal['keti2', 'keti3'] = 'keti2', tool: str = 'CBMC'):
+                     source: Literal['keti2', 'keti3'] = 'keti2', tool: str = 'CBMC', keti5: dict | None = None):
         from .inputs import TOOLS
         if tool not in TOOLS:
             raise ValueError('不支持的验证工具')
@@ -101,13 +104,13 @@ class ProjectManager:
             raise ProjectConflictError('服务正在关闭')
         if source == 'keti3':
             self.keti3_sources.validate(project_id)
-        return self._start((source, project_id, new_timestamp()), prompt, tool)
+        return self._start((source, project_id, new_timestamp()), prompt, tool, parameters(keti5))
 
-    def _start(self, key: ProjectKey, prompt: str | None, tool: str):
+    def _start(self, key: ProjectKey, prompt: str | None, tool: str, keti5=None):
         if self.closed:
             raise ProjectConflictError('服务正在关闭')
         self.projects[key] = {'status': 'accepted', 'source': key[0]}
-        self.jobs[key] = asyncio.create_task(self._run(key, prompt, tool))
+        self.jobs[key] = asyncio.create_task(self._run(key, prompt, tool, keti5))
         logger.info('项目已接受 projectID=%s', key)
         return {'projectID': key[1], 'keti': key[0], 'timestamp': key[2], 'status': 'accepted'}
 
@@ -120,11 +123,11 @@ class ProjectManager:
             await asyncio.gather(job, return_exceptions=True)
             raise
 
-    def _create(self, key: ProjectKey, prompt: str | None, ip_id: str, ip_name: str = '', tool: str = 'CBMC') -> str:
+    def _create(self, key: ProjectKey, prompt: str | None, ip_id: str, ip_name: str = '', tool: str = 'CBMC', keti5=None) -> str:
         from .inputs import create_registered, CreationRollbackError
         try:
             task_id = create_registered(self.task_manager, self.store, ip_name, tool, prompt,
-                                        project_id=key[1], keti=key[0], ip_id=ip_id, timestamp=key[2])['task_id']
+                                        project_id=key[1], keti=key[0], ip_id=ip_id, timestamp=key[2], keti5=keti5)['task_id']
             self.task_manager.set_preparation(task_id, 'downloading')
             return task_id
         except CreationRollbackError as error:
@@ -153,10 +156,11 @@ class ProjectManager:
         except (OSError, ValueError, KeyError):
             logger.exception('无法更新任务状态 task_id=%s status=%s', task_id, status)
 
-    async def _run(self, key: ProjectKey, prompt: str | None, tool: str):
+    async def _run(self, key: ProjectKey, prompt: str | None, tool: str, keti5=None):
         state = self.projects[key]
         sources = self.keti3_sources if key[0] == 'keti3' else self.keti2_sources
         try:
+            await self.keti5.progress(keti5, 98)
             state['status'] = 'collecting'
             items = await self._blocking(sources.search, key[1])
             if not items:
@@ -176,7 +180,7 @@ class ProjectManager:
                     ip_id = ip_id.strip() if isinstance(ip_id, str) else ''
                     name = basic.get('name')
                     name = name.strip() if isinstance(name, str) else ''
-                    pairs.append((self._create(key, prompt, ip_id, name, tool), item))
+                    pairs.append((self._create(key, prompt, ip_id, name, tool, keti5), item))
                 except Exception as error:
                     state['requires_resubmit'] = True
                     errors.append(f'IP {item["ipId"]} 创建失败：{error}')
@@ -191,6 +195,9 @@ class ProjectManager:
                     self._mark_unfinished(task_id, 'failed')
                     errors.append(f'任务 {task_id} 输入准备失败：{error}')
                     logger.exception('输入准备失败 task_id=%s', task_id)
+            for task_id, _ in pairs:
+                if task_id not in ready:
+                    await self.keti5.task_finished(task_id, complete=False)
             state['status'] = 'running'
             for task_id in ready:
                 try:
@@ -202,6 +209,7 @@ class ProjectManager:
                     errors.append(f'任务 {task_id} 已取消或删除')
                 except Exception as error:
                     self._mark_unfinished(task_id, 'failed')
+                    await self.keti5.task_finished(task_id)
                     errors.append(f'任务 {task_id} 执行失败：{error}')
                     logger.exception('任务执行失败 task_id=%s', task_id)
             statuses = [self._task(task_id)['status'] for task_id, _ in pairs]
@@ -216,7 +224,12 @@ class ProjectManager:
             logger.exception('项目执行失败 projectID=%s', key)
         finally:
             for entry in self._entries(key):
-                self._mark_unfinished(entry['task_id'])
+                task_id = entry['task_id']
+                unfinished = self._task(task_id)['status'] in ('created', 'queued', 'running')
+                self._mark_unfinished(task_id)
+                if unfinished:
+                    await self.keti5.task_finished(task_id, complete=False)
+            await self.keti5.complete(key, keti5)
             logger.info('项目状态 projectID=%s status=%s', key, state['status'])
 
     def _task(self, task_id: str) -> dict:
@@ -303,4 +316,6 @@ class ProjectManager:
             if not job.done():
                 job.cancel()
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)
+        # 恢复执行的任务也可能仍在上传，先结束任务再关闭归属查询。
+        await self.task_manager.close()
         self.store.close()

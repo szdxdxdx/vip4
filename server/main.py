@@ -26,6 +26,8 @@ async def lifespan(app: FastAPI):
     try:
         app.state.project_manager = ProjectManager(app.state.task_manager)
         try:
+            for task_id in app.state.task_manager.interrupted:
+                await app.state.project_manager.keti5.task_finished(task_id)
             yield
         finally:
             await app.state.project_manager.close()

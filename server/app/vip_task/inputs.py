@@ -57,7 +57,7 @@ def instructions(directory, ip_name, tool, keti, userprompt):
     return prompt
 
 
-def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=None, keti=None, ip_id='', timestamp=None):
+def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=None, keti=None, ip_id='', timestamp=None, keti5=None):
     from .timestamp import new_timestamp
     timestamp = timestamp or new_timestamp()
     for _ in range(1000):
@@ -72,7 +72,7 @@ def create_registered(manager, store, ip_name, tool, userprompt, *, project_id=N
         try:
             path = directory / 'task.json'
             metadata = json.loads(path.read_text(encoding='utf-8'))
-            metadata.update(ip_name=ip_name, tool=tool, timestamp=timestamp)
+            metadata.update(ip_name=ip_name, tool=tool, timestamp=timestamp, keti5=keti5)
             _write_metadata(path, metadata)
             store.add(task_id, project_id, ip_id, keti, timestamp)
         except Exception as error:

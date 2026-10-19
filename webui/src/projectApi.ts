@@ -1,3 +1,4 @@
+import type { Keti5 } from './keti5'
 import type { ProjectBatch, ProjectSource } from './projectTypes'
 
 async function request<T>(url: string, options: RequestInit): Promise<T> {
@@ -12,10 +13,10 @@ async function request<T>(url: string, options: RequestInit): Promise<T> {
   }
   return response.json()
 }
-export function createProject(projectID: string, userprompt: string, signal: AbortSignal, source: ProjectSource, tool: string) {
+export function createProject(projectID: string, userprompt: string, signal: AbortSignal, source: ProjectSource, tool: string, keti5: Keti5 | null = null) {
   return request<{ projectID: string; keti: ProjectSource; timestamp: string; status: 'accepted' }>('/project/create_project', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectID, source, userprompt, tool }),
+    body: JSON.stringify({ projectID, source, userprompt, tool, ...(keti5 ? { keti5 } : {}) }),
   })
 }
 

@@ -1,5 +1,9 @@
+import type { Keti5 } from './keti5'
+
 export interface Task {
   task_id: string
+  keti5?: Keti5 | null
+  keti5_upload_failed?: boolean | null
   timestamp: string | null
   projectID?: string | null
   keti?: 'keti2' | 'keti3' | null

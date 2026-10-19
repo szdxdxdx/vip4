@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PiModelsPage from './components/PiModelsPage.vue'
+import FactoryUpload from './components/FactoryUpload.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import ConversationPanel from './components/ConversationPanel.vue'
@@ -7,7 +8,7 @@ import ArtifactPanel from './components/ArtifactPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ProjectPanel from './components/ProjectPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
-const isPiModelsPage = window.location.pathname === '/config/pi-models'
+const isPiModelsPage = window.location?.pathname === '/config/pi-models'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
   listError, detailError, streamError, deletingId, deleteError, removeTask, refreshTasks, selectTask,
   draft, chatBusy, chatError, canSend, canPause, sendMessage, pauseTask,
@@ -84,6 +85,7 @@ onMounted(() => { if (!isPiModelsPage) initialize() })
             :class="{ active: activeView === view.id }" :aria-pressed="activeView === view.id"
             aria-controls="main-view" @click="activeView = view.id"
           >{{ view.label }}</button>
+          <FactoryUpload :task="task" :disabled="!selectedId || detailLoading || !!deletingId || !!detailError" />
         </nav>
         <section class="task-danger" aria-label="任务删除">
           <button type="button" :disabled="!selectedId || !!deletingId"

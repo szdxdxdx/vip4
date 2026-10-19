@@ -182,6 +182,7 @@ class Task:
         metadata = {
             'task_id': task_id,
             'status': 'created',
+            'keti5': None,
             'created_at': datetime.now(timezone.utc).isoformat(),
         }
         _write_metadata(task_dir / 'task.json', metadata)
@@ -301,7 +302,7 @@ class Task:
         ):
             raise TaskMetadataError('任务聊天元数据格式错误')
         task = {'task_id': task_dir.name, **{
-            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id', 'ip_name', 'tool', 'timestamp', 'preparation_status', 'preparation_error') if key in metadata
+            key: metadata[key] for key in ('status', 'created_at', 'chatstatus', 'verification_status', 'turn_id', 'ip_name', 'tool', 'timestamp', 'preparation_status', 'preparation_error', 'keti5', 'keti5_upload_failed') if key in metadata
         }}
         task.setdefault('chatstatus', task['status'])
         task.setdefault('turn_id', 0)
@@ -541,7 +542,8 @@ class Task:
         metadata['chatstatus'] = 'running'
         metadata['turn_id'] = self.turn_id
         _write_metadata(metadata_file, metadata)
-        status = 'idle' if self.chat_mode else 'completed'
+        verifying = not self.chat_mode or metadata.get('verification_status') == 'paused'
+        status = 'completed' if verifying else 'idle'
         report_attempt = False
         before = {str(p): (p.stat().st_mtime_ns, p.stat().st_size)
                   for p in (task_dir / 'workspace').glob('*_suite/output/report.*')}
@@ -570,7 +572,7 @@ class Task:
                 if reports:
                     status = 'completed'
                     metadata['reports'] = reports
-                elif not self.chat_mode:
+                elif verifying:
                     status = 'failed'
                     write({'type': 'error', 'error': 'Agent 已停止，但未生成最终验证报告，任务未完成'})
         except asyncio.CancelledError:
@@ -584,10 +586,14 @@ class Task:
             if not self.pausing:
                 write({'type': 'error', 'error': '任务执行失败'})
         finally:
+            # 人工上传可能在验证期间更新最近上传状态。
+            latest = self._metadata(self.task_dir)
+            if 'keti5_upload_failed' in latest:
+                metadata['keti5_upload_failed'] = latest['keti5_upload_failed']
             metadata['status'] = status
             metadata['chatstatus'] = status
             metadata['turn_id'] = self.turn_id
-            if not self.chat_mode or status == 'completed' or report_attempt:
+            if verifying or status == 'completed' or report_attempt:
                 metadata['verification_status'] = status
             _write_metadata(metadata_file, metadata)
             write({'type': 'status', 'status': status})

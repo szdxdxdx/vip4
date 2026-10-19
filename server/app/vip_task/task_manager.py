@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 class TaskManager:
     def __init__(self):
         self.store = None
+        self.keti5 = None
+        self.interrupted = []
         self.tasks: dict[str, Task] = {}
         self.deleting: set[str] = set()
         # 所有入口共用一把锁，避免人工任务和项目任务抢占验证资源。
@@ -31,6 +33,9 @@ class TaskManager:
                     if metadata['status'] in ('created', 'queued', 'running'):
                         metadata['status'] = 'cancelled'
                         metadata['chatstatus'] = 'cancelled'
+                        if metadata.get('verification_status', 'created') not in ('completed', 'failed', 'cancelled'):
+                            metadata['verification_status'] = 'cancelled'
+                        self.interrupted.append(directory.name)
                         _write_metadata(directory / 'task.json', metadata)
                         logger.warning('服务重启，取消未完成任务 task_id=%s', directory.name)
                 except (TaskPathError, TaskNotFoundError, TaskMetadataError, OSError, ValueError, KeyError):
@@ -81,6 +86,8 @@ class TaskManager:
             metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
             metadata['status'] = 'paused' if task.pausing else 'cancelled'
             metadata['chatstatus'] = metadata['status']
+            if not task.chat_mode or metadata.get('verification_status') == 'paused':
+                metadata['verification_status'] = metadata['status']
             _write_metadata(metadata_path, metadata)
             logger.info('任务已取消 task_id=%s', task.task_id)
             if not task.pausing:
@@ -89,6 +96,20 @@ class TaskManager:
             if task.inflight:
                 task.pending[:0] = task.inflight
                 task.inflight = []
+            if self.keti5 is not None:
+                await self.keti5.task_finished(task.task_id)
+
+    async def _finish_unstarted(self, task, status):
+        path = task.task_dir / 'task.json'
+        metadata = json.loads(path.read_text(encoding='utf-8'))
+        if metadata['status'] not in ('created', 'queued', 'running'):
+            return
+        metadata.update(status=status, chatstatus=status)
+        if metadata.get('verification_status', 'created') not in ('completed', 'failed', 'cancelled'):
+            metadata['verification_status'] = status
+        _write_metadata(path, metadata)
+        if self.keti5 is not None:
+            await self.keti5.task_finished(task.task_id)
 
     async def send_message(self, task_id: str, message: str):
         if task_id in self.deleting:
@@ -155,6 +176,7 @@ class TaskManager:
                         await operation
                         task.set_status('paused')
                         raise
+                await self._finish_unstarted(task, 'paused')
                 task.set_status('paused')
                 task.write_event({'type': 'status', 'status': 'paused'})
             finally:
@@ -236,6 +258,7 @@ class TaskManager:
                         task.job.cancel()
                     # 等待 Agent 上下文退出及元数据 finally，再删除目录。
                     await asyncio.gather(task.job, return_exceptions=True)
+                await self._finish_unstarted(task, 'cancelled')
             await asyncio.to_thread(shutil.rmtree, Task._task_dir(task_id))
             self.tasks.pop(task_id, None)
             if self.store is not None:
@@ -304,14 +327,9 @@ class TaskManager:
                 if task.job is not None and not task.job.done():
                     task.job.cancel()
                     await asyncio.gather(task.job, return_exceptions=True)
-        # 协程尚未开始时取消，不会进入 finally，仍需落盘终态。
+        # 协程启动前取消也需结束验证并执行工厂通知。
         for task in self.tasks.values():
             try:
-                path = task.task_dir / 'task.json'
-                metadata = json.loads(path.read_text(encoding='utf-8'))
-                if metadata['status'] in ('created', 'queued', 'running'):
-                    metadata['status'] = 'cancelled'
-                    metadata['chatstatus'] = 'cancelled'
-                    _write_metadata(path, metadata)
+                await self._finish_unstarted(task, 'cancelled')
             except FileNotFoundError:
                 continue

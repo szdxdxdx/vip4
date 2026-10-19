@@ -3,10 +3,12 @@ import { createTask, listDataset, listTasks } from '../api'
 import { createProject, getProgress } from '../projectApi'
 import type { ProjectBatch, ProjectSource } from '../projectTypes'
 import { batchStatusLabel, type Task } from '../types'
+import { readKeti5 } from '../keti5'
 
 export function useProject(active: Ref<boolean>, onChanged: () => void = () => {}) {
+  const keti5 = readKeti5(window.location?.search || '')
   const source = ref<'local' | ProjectSource>('local')
-  const projectID = ref(''), ip = ref(''), tool = ref('CBMC'), prompt = ref('')
+  const projectID = ref(keti5?.projectId || ''), ip = ref(''), tool = ref('CBMC'), prompt = ref('')
   const dataset = ref<string[]>([]), tasks = ref<Task[]>([])
   const queryID = ref(''), queryTaskID = ref('')
   const error = ref(''), listError = ref(''), busy = ref(false), loading = ref(false)
@@ -76,7 +78,7 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
   }
   async function submit() {
     if (busy.value || !active.value) return
-    const selectedSource = source.value, id = projectID.value.trim(), submittedRevision = revision
+    const selectedSource = source.value, id = keti5?.projectId ?? projectID.value.trim(), submittedRevision = revision
     error.value = ''
     if (selectedSource === 'local' ? !ip.value : !id) {
       error.value = selectedSource === 'local' ? '请选择数据集 IP' : '请输入项目 ID'
@@ -92,7 +94,7 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
         appendMessage(`${task.task_id}：提交成功`)
       }
       else {
-        const batch = await createProject(id, prompt.value, mutationController.signal, selectedSource, tool.value)
+        const batch = await createProject(id, prompt.value, mutationController.signal, selectedSource, tool.value, keti5)
         if (disposed) return
         batches.value.push(batch)
         logBatch(batch)
@@ -117,6 +119,6 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
   watch([queryID, queryTaskID], () => { cancelTimer(); cancelList(); tasks.value = []; listError.value = '' }, { flush: 'sync' })
   watch(active, enabled => { if (!enabled) { cancelTimer(); cancelList() } }, { flush: 'sync' })
   onBeforeUnmount(() => { disposed = true; cancelTimer(); cancelList(); datasetController.abort(); mutationController.abort() })
-  return { messages, batches, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, error, busy,
+  return { keti5, messages, batches, source, projectID, ip, tool, prompt, dataset, tasks, queryID, queryTaskID, error, busy,
     listError, loading, refresh, submit }
 }

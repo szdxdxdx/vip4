@@ -162,3 +162,19 @@ def download_task(task_id: str = Query(max_length=64, pattern=r'^[a-zA-Z0-9][a-z
     archive = _read_task(task_archive, task_id)
     return FileResponse(archive, media_type='application/zip', filename=f'{task_id}.zip',
                         background=BackgroundTask(archive.unlink, missing_ok=True))
+
+
+@router.post('/task/upload_to_factory')
+async def upload_to_factory(task_id: str = Query(max_length=64, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')):
+    from ..vip_task.keti5 import parameters, upload
+    from ..vip_task.task import Task
+    metadata = _read_task(lambda: Task._metadata(Task._task_dir(task_id)))
+    if parameters(metadata.get('keti5')) is None:
+        raise HTTPException(400, '此任务没有 keti5 参数，无法上传')
+    try:
+        await upload(task_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, '上传到工厂失败，请检查服务配置或稍后重传') from None
+    return {'success': True}
