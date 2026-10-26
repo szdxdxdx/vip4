@@ -1,7 +1,6 @@
 """隔离任务目录和数据库，以伪后端验证课题五交互。"""
 import asyncio
 import json
-import os
 from pathlib import Path
 import socket
 import tempfile
@@ -11,13 +10,15 @@ import unittest
 from unittest.mock import patch
 
 import uvicorn
+import httpx
+from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.service.api import router
 from app.service.project_api import ProjectRequest
 from app.vip_task import config, keti5
-from app.vip_task.inputs import create_registered
+from app.vip_task.inputs import create_registered, create_local
 from app.vip_task.project import ProjectManager, ProjectStore
 from app.vip_task.task import Task, _write_metadata
 from app.vip_task.task_manager import TaskManager
@@ -53,9 +54,9 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
         self.path_patch = patch.object(config, 'VIP_TASK_DIR', self.root / 'tasks')
         self.path_patch.start()
         base = f'http://127.0.0.1:{self.port}'
-        self.env = patch.dict(os.environ, {'KETI5_UPLOAD_URL': base + '/sw/idep/plugin/reportUpload',
-                                          'KETI5_CALLBACK_URL': base + '/demo-callback/notify'})
-        self.env.start()
+        self.settings = patch.multiple(config, KETI5_UPLOAD_URL=base + '/sw/idep/plugin/reportUpload',
+                                       KETI5_CALLBACK_URL=base + '/demo-callback/notify')
+        self.settings.start()
         self.store = ProjectStore(self.root / 'projects.sqlite3')
         self.manager = TaskManager()
         self.manager.store = self.store
@@ -65,7 +66,7 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.manager.close()
         self.store.close()
-        self.env.stop()
+        self.settings.stop()
         self.path_patch.stop()
         self.tmp.cleanup()
 
@@ -116,7 +117,7 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
             temporary.append(result)
             return result
         with patch.object(keti5, 'task_archive', archive):
-            with patch.dict(os.environ, {'KETI5_UPLOAD_URL': f'http://127.0.0.1:{self.port}/missing'}):
+            with patch.object(config, 'KETI5_UPLOAD_URL', f'http://127.0.0.1:{self.port}/missing'):
                 with self.assertRaises(Exception):
                     await keti5.upload(task.task_id)
             self.assertTrue(Task._metadata(task.task_dir)['keti5_upload_failed'])
@@ -133,7 +134,7 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
         with TestClient(api) as client:
             response = client.post('/task/upload_to_factory', params={'task_id': task.task_id})
             self.assertEqual(response.status_code, 200)
-            with patch.dict(os.environ, {'KETI5_UPLOAD_URL': ''}):
+            with patch.object(config, 'KETI5_UPLOAD_URL', ''):
                 self.assertEqual(client.post('/task/upload_to_factory', params={'task_id': task.task_id}).status_code, 502)
             local = self.create(None)
             self.assertEqual(client.post('/task/upload_to_factory', params={'task_id': local.task_id}).status_code, 400)
@@ -190,10 +191,10 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
         task = self.create()
         async def run():
             self.status(task, 'completed')
-        with patch.object(task, 'run', run), patch.dict(os.environ, {
-            'KETI5_UPLOAD_URL': f'http://127.0.0.1:{self.port}/missing',
-            'KETI5_CALLBACK_URL': f'http://127.0.0.1:{self.port}/missing',
-        }):
+        with patch.object(task, 'run', run), patch.multiple(config,
+            KETI5_UPLOAD_URL=f'http://127.0.0.1:{self.port}/missing',
+            KETI5_CALLBACK_URL=f'http://127.0.0.1:{self.port}/missing',
+        ):
             self.manager._schedule(task)
             await task.job
         self.assertEqual(Task._metadata(task.task_dir)['verification_status'], 'completed')
@@ -256,6 +257,121 @@ class Keti5Tests(unittest.IsolatedAsyncioTestCase):
         recovered = TaskManager()
         self.assertEqual(recovered.interrupted, [task.task_id])
         self.assertEqual(Task._metadata(task.task_dir)['verification_status'], 'cancelled')
+
+    def local_dataset(self):
+        dataset = self.root / 'dataset'
+        (dataset / 'ip' / '测试IP').mkdir(parents=True)
+        (dataset / 'include').mkdir()
+        (dataset / 'ip' / '测试IP' / 'main.c').write_text('int main(){}')
+        (dataset / 'include' / 'common.h').write_text('#pragma once')
+        return dataset
+
+    async def test_local_api_keeps_factory_id_and_uploads(self):
+        dataset = self.local_dataset()
+        params = {**PARAMS, 'projectId': '0002059824406008037378'}
+        api = FastAPI()
+        api.include_router(router)
+        api.state.task_manager = self.manager
+        api.state.project_manager = SimpleNamespace(store=self.store)
+        async def run(task):
+            self.status(task, 'completed')
+        with patch.object(config, 'VIP_DATASET_DIR', dataset), patch.object(Task, 'run', run):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url='http://test') as client:
+                response = await client.post('/task/create_task', json={
+                    'ip_name': '测试IP', 'tool': 'CBMC', 'keti5': params,
+                })
+            self.assertEqual(response.status_code, 201)
+            task_id = response.json()['task_id']
+            task = self.manager.tasks[task_id]
+            await task.job
+        entry = self.store.all_entries()[0]
+        self.assertEqual(entry['projectID'], params['projectId'])
+        self.assertIsNone(entry['keti'])
+        self.assertEqual(Task._metadata(task.task_dir)['keti5'], params)
+        self.assertTrue((task.task_dir / 'input' / 'ip' / '测试IP' / 'main.c').is_file())
+        self.assertTrue((task.task_dir / 'input' / 'include' / 'common.h').is_file())
+        self.assertEqual([r.get('progress', 'zip') for r in records], [98, 'zip', 100])
+        self.assertFalse(Task._metadata(task.task_dir)['keti5_upload_failed'])
+        await keti5.upload(task_id)
+        self.assertEqual(len(records), 4)
+
+    async def test_local_partial_parameters_preserve_original_behavior(self):
+        dataset = self.local_dataset()
+        async def run(task):
+            self.status(task, 'completed')
+        with patch.object(config, 'VIP_DATASET_DIR', dataset), patch.object(Task, 'run', run):
+            for params in [None, {'projectId': '123'}]:
+                result = await create_local(self.manager, self.store, '测试IP', 'CBMC', None, keti5=params)
+                task = self.manager.tasks[result['task_id']]
+                await task.job
+                self.assertIsNone(Task._metadata(task.task_dir)['keti5'])
+        self.assertTrue(all(row['projectID'] is None and row['keti'] is None for row in self.store.all_entries()))
+        self.assertEqual(records, [])
+
+    async def test_local_pause_and_resume_share_factory_lifecycle(self):
+        dataset = self.local_dataset()
+        count = 0
+        async def run(task):
+            nonlocal count
+            count += 1
+            self.status(task, 'paused' if count == 1 else 'completed')
+        with patch.object(config, 'VIP_DATASET_DIR', dataset), patch.object(Task, 'run', run):
+            result = await create_local(self.manager, self.store, '测试IP', 'CBMC', None, keti5=PARAMS)
+            task = self.manager.tasks[result['task_id']]
+            await task.job
+            self.assertEqual([r.get('progress', 'zip') for r in records], [98, 'zip'])
+            self.manager._schedule(task)
+            await task.job
+        self.assertEqual([r.get('progress', 'zip') for r in records], [98, 'zip', 'zip', 100])
+
+    async def test_local_preparation_failure_uploads_before_rollback(self):
+        dataset = self.local_dataset()
+        with patch.object(config, 'VIP_DATASET_DIR', dataset), patch(
+            'app.vip_task.inputs.collect_local', side_effect=ValueError('复制失败')
+        ):
+            with self.assertRaises(ValueError):
+                await create_local(self.manager, self.store, '测试IP', 'CBMC', None, keti5=PARAMS)
+        self.assertEqual([r.get('progress', 'zip') for r in records], [98, 'zip', 100])
+        self.assertEqual(self.store.all_entries(), [])
+
+    async def test_factory_errors_keep_full_json_in_log_and_frontend(self):
+        task = self.create()
+        payload = {'code': 500, 'success': False, 'message': '流水线不存在，请更换流水线名称',
+                   'result': {'details': '完整错误' * 2000, 'buildId': int(PARAMS['buildId'])}}
+        body = json.dumps(payload, ensure_ascii=False, indent=2)
+        def reject(task_id, params):
+            keti5._check_response(httpx.Response(200, text=body), '上传', 'code', 200)
+        api = FastAPI()
+        api.include_router(router)
+        with patch.object(keti5, '_upload', reject), self.assertLogs('app', level='INFO') as logs:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url='http://test') as client:
+                response = await client.post('/task/upload_to_factory', params={'task_id': task.task_id})
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()['detail']
+        self.assertIn('HTTP 200', detail)
+        self.assertIn(body, detail)
+        self.assertIn(body, '\n'.join(logs.output))
+        self.assertTrue(Task._metadata(task.task_dir)['keti5_upload_failed'])
+
+    async def test_http_and_invalid_json_errors_keep_response_text(self):
+        for status, body in [(403, '<html>需要认证</html>'), (200, '不是JSON'),
+                             (200, '[]'), (200, 'null'), (200, '{"success":false,"message":"执行不存在"}')]:
+            with self.subTest(status=status, body=body):
+                with self.assertRaises(ValueError) as raised:
+                    keti5._check_response(httpx.Response(status, text=body), '进度推送', 'success', True)
+                self.assertIn(body, str(raised.exception))
+                self.assertIn(f'HTTP {status}', str(raised.exception))
+
+    async def test_connection_error_details_reach_frontend(self):
+        task = self.create()
+        api = FastAPI()
+        api.include_router(router)
+        with patch.object(keti5, '_upload', side_effect=httpx.ConnectError('Connection refused')):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url='http://test') as client:
+                response = await client.post('/task/upload_to_factory', params={'task_id': task.task_id})
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('ConnectError', response.json()['detail'])
+        self.assertIn('Connection refused', response.json()['detail'])
 
     async def test_actual_resume_failure_becomes_terminal(self):
         task = self.create()

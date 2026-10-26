@@ -27,7 +27,7 @@ const valid = computed(() => source.value === 'local' ? !!ip.value : !!projectID
             <option v-for="item in dataset" :key="item" :value="item">{{ item }}</option>
           </select>
         </template>
-        <template v-else>
+        <template v-if="source !== 'local' || keti5">
           <label for="project-id">项目 ID</label>
           <input id="project-id" v-model="projectID" :readonly="!!keti5" autocomplete="off" placeholder="输入 projectID" />
         </template>

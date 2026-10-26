@@ -8,6 +8,7 @@ import string
 from datetime import datetime
 
 from . import config
+from .keti5 import parameters
 from .task import TaskExistsError, _write_metadata
 
 class CreationRollbackError(Exception):
@@ -123,13 +124,22 @@ def collect_local(ip_name, directory):
                                      'path': str(target / path.relative_to(root))})
 
 
-async def create_local(manager, store, ip_name, tool, userprompt):
+async def create_local(manager, store, ip_name, tool, userprompt, *, keti5=None):
     dataset_ip(ip_name)
-    result = create_registered(manager, store, ip_name, tool, userprompt)
+    keti5 = parameters(keti5)
+    # 本地只关联传入项目，不据此访问课题二、三；来源仍为本地。
+    result = create_registered(manager, store, ip_name, tool, userprompt,
+                               project_id=keti5['projectId'] if keti5 else None, keti5=keti5)
     task_id = result['task_id']
     try:
+        if manager.keti5 is not None:
+            await manager.keti5.progress(keti5, 98)
         await manager.prepare_task(task_id, collect_local, ip_name, config.VIP_TASK_DIR / task_id)
     except BaseException:
+        if keti5 is not None and manager.keti5 is not None:
+            metadata = manager.tasks[task_id]._metadata(config.VIP_TASK_DIR / task_id)
+            if metadata['status'] == 'failed':
+                await manager.keti5.task_finished(task_id)
         await manager.delete_task(task_id)
         raise
     manager._schedule(manager.tasks[task_id])

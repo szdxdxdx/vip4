@@ -32,6 +32,21 @@ async function upload() {
   <button type="button" :disabled="disabled || !task?.keti5 || busy" :aria-busy="busy" @click="upload">
     {{ busy ? '上传中…' : '上传到工厂' }}
   </button>
-  <p v-if="error" class="project-error" role="alert">{{ error }}</p>
+  <pre v-if="error" class="project-error factory-upload-error" role="alert" tabindex="0" aria-label="工厂上传错误详情">{{ error }}</pre>
   <p v-else-if="lastFailed != null" class="project-hint" role="status">最近上传：{{ lastFailed ? '失败' : '成功' }}</p>
 </template>
+<style scoped>
+.factory-upload-error {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 20rem;
+  flex-shrink: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font: inherit;
+}
+</style>

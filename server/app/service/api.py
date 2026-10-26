@@ -1,3 +1,4 @@
+import logging
 from starlette.background import BackgroundTask
 from ..vip_task.archive import task_archive
 from typing import Literal
@@ -16,6 +17,7 @@ from ..vip_task.task import (
     TaskReadLimitError,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -23,6 +25,7 @@ class TaskRequest(BaseModel):
     ip_name: str = Field(min_length=1, max_length=128, pattern=r'^[^/\\]+$')
     tool: Literal['CBMC', 'CPAchecker', 'KLEE']
     userprompt: str | None = None
+    keti5: dict | None = None
 
 
 @router.get('/task/list_dataset')
@@ -34,7 +37,7 @@ def list_dataset():
 async def create_task(body: TaskRequest, request: Request):
     try:
         return await create_local(request.app.state.task_manager, request.app.state.project_manager.store,
-                                  body.ip_name, body.tool, body.userprompt)
+                                  body.ip_name, body.tool, body.userprompt, keti5=body.keti5)
     except ValueError as error:
         raise HTTPException(400, str(error)) from None
     except (TaskExistsError, TaskDeletingError) as error:
@@ -175,6 +178,7 @@ async def upload_to_factory(task_id: str = Query(max_length=64, pattern=r'^[a-zA
         await upload(task_id)
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(502, '上传到工厂失败，请检查服务配置或稍后重传') from None
+    except Exception as error:
+        logger.exception('上传到工厂失败 task_id=%s', task_id)
+        raise HTTPException(502, f'上传到工厂失败（{type(error).__name__}）：{error}') from None
     return {'success': True}

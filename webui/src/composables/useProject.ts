@@ -89,7 +89,7 @@ export function useProject(active: Ref<boolean>, onChanged: () => void = () => {
     appendMessage('请求中…')
     try {
       if (selectedSource === 'local') {
-        const task = await createTask(ip.value, tool.value, prompt.value, mutationController.signal)
+        const task = await createTask(ip.value, tool.value, prompt.value, mutationController.signal, keti5)
         if (disposed) return
         appendMessage(`${task.task_id}：提交成功`)
       }

@@ -1,4 +1,5 @@
 import type { Task, TaskDetail, TaskEvent } from './types'
+import type { Keti5 } from './keti5'
 
 async function checked(response: Response): Promise<Response> {
   if (response.ok) return response
@@ -24,10 +25,10 @@ export function taskZipUrl(id: string) {
 export async function getTask(id: string, signal?: AbortSignal): Promise<TaskDetail> {
   return (await checked(await fetch(`/task/get_task?task_id=${encodeURIComponent(id)}`, { signal }))).json()
 }
-export async function createTask(ipName: string, tool: string, userprompt: string, signal?: AbortSignal): Promise<{ task_id: string }> {
+export async function createTask(ipName: string, tool: string, userprompt: string, signal?: AbortSignal, keti5: Keti5 | null = null): Promise<{ task_id: string }> {
   return (await checked(await fetch('/task/create_task', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ip_name: ipName, tool, userprompt }),
+    body: JSON.stringify({ ip_name: ipName, tool, userprompt, ...(keti5 ? { keti5 } : {}) }),
   }))).json()
 }
 export async function deleteTask(id: string): Promise<void> {

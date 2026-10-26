@@ -2,10 +2,10 @@
 import asyncio
 import logging
 import json
-import os
 
 import httpx
 
+from . import config
 from .archive import task_archive
 from .task import Task, TaskNotFoundError, _write_metadata
 
@@ -21,19 +21,33 @@ def parameters(value):
     return {key: value[key] for key in FIELDS}
 
 
+def _check_response(response, action, field, expected):
+    # 完整保留响应正文，便于定位 HTTP、业务码及非 JSON 错误；不记录请求认证。
+    body = response.text
+    logger.info('keti5 %s响应 HTTP=%s\n%s', action, response.status_code, body)
+    detail = f'keti5 {action}失败（HTTP {response.status_code}）\n{body}'
+    if not response.is_success:
+        raise ValueError(detail)
+    try:
+        data = response.json()
+    except ValueError:
+        raise ValueError(f'keti5 {action}响应不是有效 JSON（HTTP {response.status_code}）\n{body}') from None
+    value = data.get(field) if isinstance(data, dict) else None
+    if type(value) is not type(expected) or value != expected:
+        raise ValueError(detail)
+
+
 def _upload(task_id, params):
-    url = os.getenv('KETI5_UPLOAD_URL', '')
+    url = config.KETI5_UPLOAD_URL
     if not url:
         raise ValueError('尚未配置 KETI5_UPLOAD_URL')
     archive = task_archive(task_id)
     try:
-        with archive.open('rb') as source, httpx.Client(timeout=float(os.getenv('KETI5_TIMEOUT', '30'))) as client:
+        with archive.open('rb') as source, httpx.Client(timeout=config.KETI5_TIMEOUT) as client:
             response = client.post(url, data={
                 'pipelineName': params['jobName'], 'buildId': params['buildId'], 'toolName': params['toolName'],
             }, files={'file': (f'{task_id}.zip', source, 'application/zip')})
-            response.raise_for_status()
-            if response.json().get('code') != 200:
-                raise ValueError('工厂返回上传失败')
+            _check_response(response, '上传', 'code', 200)
     finally:
         archive.unlink(missing_ok=True)
 
@@ -66,18 +80,16 @@ async def upload(task_id):
 
 
 def notify(params, progress):
-    url = os.getenv('KETI5_CALLBACK_URL', '')
+    url = config.KETI5_CALLBACK_URL
     if not url:
         raise ValueError('尚未配置 KETI5_CALLBACK_URL')
     payload = {key: params[key] for key in ('executionId', 'jobName', 'toolName')}
     # Python 整数及 JSON 编码不会经过浮点数，保留大整数精度。
     payload.update(buildId=int(params['buildId']), progress=progress, status=int(progress == 100))
-    auth = (os.getenv('KETI5_JENKINS_USER', ''), os.getenv('KETI5_JENKINS_API_TOKEN', ''))
-    with httpx.Client(timeout=float(os.getenv('KETI5_TIMEOUT', '30'))) as client:
+    auth = (config.KETI5_JENKINS_USER, config.KETI5_JENKINS_API_TOKEN)
+    with httpx.Client(timeout=config.KETI5_TIMEOUT) as client:
         response = client.post(url, json=payload, auth=auth)
-        response.raise_for_status()
-        if response.json().get('success') is not True:
-            raise ValueError('工厂返回进度推送失败')
+        _check_response(response, '进度推送', 'success', True)
 
 
 class Keti5:

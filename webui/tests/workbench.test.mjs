@@ -1497,7 +1497,7 @@ test('工厂 URL 五项全有才生效，保留原字符串，缺失及空白全
     }
   }
 })
-test('工厂参数仅远程提交携带，项目 ID 原样锁定，本地请求不携带', async () => {
+test('完整工厂参数随本地及远程提交携带，项目 ID 保留原字符串', async () => {
   globalThis.window = { location: { search: factorySearch } }
   const requests = []
   globalThis.fetch = async (url, options) => {
@@ -1510,7 +1510,8 @@ test('工厂参数仅远程提交携带，项目 ID 原样锁定，本地请求�
     assert.equal(f.p.projectID.value, factoryParams.projectId)
     f.p.ip.value = 'AttiCal'
     await f.p.submit()
-    assert.equal('keti5' in requests[0].body, false)
+    assert.equal(requests[0].url, '/task/create_task')
+    assert.deepEqual(requests[0].body, { ip_name: 'AttiCal', tool: 'CBMC', userprompt: '', keti5: factoryParams })
     for (const source of ['keti2', 'keti3']) {
       f.p.source.value = source
       f.p.projectID.value = '试图改写'
@@ -1521,6 +1522,41 @@ test('工厂参数仅远程提交携带，项目 ID 原样锁定，本地请求�
       assert.equal(body.tool, 'CBMC')
     }
   } finally { f.app.unmount(); globalThis.window = { location: { search: '' } } }
+})
+test('本地完整工厂参数显示只读关联 ID，缺参及无参数不显示也不携带', async () => {
+  const partial = new URLSearchParams(factoryParams)
+  partial.delete('executionId')
+  for (const search of [factorySearch, '?' + partial, '']) {
+    globalThis.window = { location: { search } }
+    const requests = []
+    globalThis.fetch = async (url, options) => {
+      if (url === '/task/list_dataset') return response({ ips: [{ ip_name: 'AttiCal' }] })
+      requests.push({ url, body: JSON.parse(options.body) })
+      return response({ task_id: 'local' })
+    }
+    const rootElement = { children: [] }
+    const app = renderer.createApp({ setup() { return () => h(ProjectPanel, { active: true }) } })
+    const descendants = node => [node, ...(node.children || []).flatMap(descendants)]
+    const nodes = () => descendants(rootElement)
+    try {
+      app.mount(rootElement); await flushProject()
+      const id = nodes().find(n => n.props?.id === 'project-id')
+      if (search === factorySearch) {
+        assert.equal(id.value, factoryParams.projectId)
+        assert.equal(id.props.readonly, true)
+      } else assert.equal(id, undefined)
+      nodes().find(n => n.props?.id === 'dataset-ip').props['onUpdate:modelValue']('AttiCal')
+      await nextTick()
+      nodes().find(n => n.tag === 'form' && !n.props?.class).props.onSubmit({ preventDefault() {} })
+      await flushProject()
+      assert.equal(requests.length, 1)
+      assert.equal(requests[0].url, '/task/create_task')
+      assert.deepEqual(requests[0].body, {
+        ip_name: 'AttiCal', tool: 'CBMC', userprompt: '',
+        ...(search === factorySearch ? { keti5: factoryParams } : {}),
+      })
+    } finally { app.unmount(); globalThis.window = { location: { search: '' } } }
+  }
 })
 test('工厂上传：空参数禁用、状态优先、确认取消、防并发、重复上传及错误', async () => {
   let confirmations = 0, calls = 0, complete
@@ -1566,10 +1602,34 @@ test('工厂上传：空参数禁用、状态优先、确认取消、防并发�
     complete(new Response(JSON.stringify({ detail: '工厂返回错误' }), { status: 502 }))
     await request; await nextTick()
     assert.ok(nodes().some(n => n.text === '工厂返回错误' && n.props?.role === 'alert'))
+    // HTTP 502 detail 原样呈现：换行、超长 JSON 及恶意 HTML 都不能被截断或解释。
+    const detail = '上传到工厂失败，上游 HTTP 500\n' + JSON.stringify({
+      message: '<script>alert("xss")</script><img src=x onerror=alert(1)>',
+      payload: '长JSON'.repeat(20000),
+      tail: '完整响应末尾',
+    }, null, 2)
+    request = button().props.onClick()
+    complete(new Response(JSON.stringify({ detail }), { status: 502 }))
+    await request; await nextTick()
+    const alert = nodes().find(n => n.props?.role === 'alert')
+    assert.equal(alert.tag, 'pre')
+    assert.equal(alert.text, detail)
+    assert.ok(alert.text.endsWith('\n}'))
+    assert.equal(alert.props.tabindex, '0')
+    assert.equal(alert.props.innerHTML, undefined)
+    assert.equal(nodes().some(n => ['script', 'img'].includes(n.tag)), false)
+    // 内存渲染器不计算 CSS，检查真实组件的保留换行、长行折行与限高滚动约束。
+    const source = await readFile(resolve(root, 'src/components/FactoryUpload.vue'), 'utf8')
+    assert.doesNotMatch(source, /v-html|text-overflow:\s*ellipsis|line-clamp/)
+    const css = source.match(/\.factory-upload-error\s*\{([^}]+)\}/)[1]
+    for (const rule of [/white-space:\s*pre-wrap/, /overflow-wrap:\s*anywhere/, /min-width:\s*0/, /max-width:\s*100%/, /max-height:\s*20rem/, /overflow:\s*auto/]) {
+      assert.match(css, rule)
+    }
     props.task.verification_status = 'idle'; await nextTick()
     request = button().props.onClick()
-    assert.equal(confirmations, 4)
+    assert.equal(confirmations, 5)
     complete(response({ success: true })); await request; await nextTick()
+    assert.equal(nodes().some(n => n.props?.role === 'alert'), false)
     assert.equal(button().props.disabled, false)
   } finally { app.unmount() }
 })

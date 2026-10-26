@@ -30,7 +30,7 @@ AI Agent 依照 SKILL 的指导，调用 MCP 提供的工具，完成软件 IP �
   - project：负责项目验证编排，先收集全部 IP 输入，再通过任务管理器依次执行
   - keti2_sources：负责课题二项目查询及本机、HTTP 文件获取，课题二路径通过 POST 下载接口获取
   - keti3_sources：按 projectID 打包并下载课题三全部产物，安全解压、保留目录及原始编码；整个产物作为单 IP，IR 为形式模型，根层 .c/.h 为主代码
-- ProjectStore：SQLite 保存 task_id、projectID、keti、timestamp 及实体模型基本信息的 id（ip_id）；本地任务 projectID、keti 为 NULL，历史 keti 保持 NULL；名称保存在任务元数据，项目进度由元数据汇总
+- ProjectStore：SQLite 保存 task_id、projectID、keti、timestamp 及实体模型基本信息的 id（ip_id）；本地任务 keti 为 NULL，projectID 可关联工厂项目，历史 keti 保持 NULL；名称保存在任务元数据，项目进度由元数据汇总
 - service：主要负责对外提供服务接口
   - api：主要负责对外提供 HTTP 接口
 - tmp_keti3：课题三接口未公开时的临时后端目录，模拟打包与下载接口，只服务同目录的 NWM_synthesis.zip 与唯一 projectID
@@ -82,7 +82,7 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 
 ## 单个 IP 验证，使用本地数据集
 
-【已实现】在项目验证左栏选择本地数据集、IP 和工具（CBMC、CPAchecker、KLEE），提示词可选；自动分配任务 ID，无需 projectID。AttiCal 单 case 测试模板仅点击小字时填入，不默认填写
+【已实现】在项目验证左栏选择本地数据集、IP 和工具（CBMC、CPAchecker、KLEE），提示词可选；自动分配任务 ID，可关联工厂传入的 projectID。AttiCal 单 case 测试模板仅点击小字时填入，不默认填写
 【已实现】后端接收请求，创建任务，创建验证目录 `/app/vip4/tasks/<task_id>` ，
 【已实现】把选中 IP 的整个目录及公共 include 从 `/app/vip4/dataset/16-ip` 复制到 `<task_id>/input`，保留相对目录结构并记录 files.csv，
 【已实现】启动 pi Agent 进行验证
@@ -113,7 +113,7 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 
 ## 本地存储
 
-【已实现】SQLite 保存任务 ID、projectID、keti、时间戳、IP ID；本地任务 projectID 和 keti 都为 NULL，旧记录 keti 保持 NULL，任务进度由元数据汇总。任务 ID 碰撞时重新生成，包括插入数据库发现重复的情况
+【已实现】SQLite 保存任务 ID、projectID、keti、时间戳、IP ID；本地任务 keti 为 NULL，projectID 可关联工厂项目，旧记录 keti 保持 NULL，任务进度由元数据汇总。任务 ID 碰撞时重新生成，包括插入数据库发现重复的情况
 【已实现】SQLite 中的内容与 `/app/vip4/tasks/<task_id>` 目录中的内容一一对应，删除任务时同时删除 SQLite 中的记录
 【已实现】手动删除目录后保留 SQLite 记录，列表提示实际目录已删除；部分任务数据缺失时提示数据缺失，可按 taskID 显式删除记录
 【已实现】SQLite 以 taskID 为唯一标识，keti、projectID、时间戳描述任务归属；已有数据时间戳统一为 2026-10-14 00:00:00，新提交由后端生成 UTC 时间戳，所有任务均可按 taskID 查询和删除
@@ -144,9 +144,14 @@ python 包实现的业务模块，除了包含业务模块核心逻辑代码外�
 
 ## keti5 交互
 
+【已实现】日志记录完整响应，上传错误前端全文展示
+
+【已实现】本地及课题二三共用工厂参数与上传
+【已实现】本地关联传入ID，输入仍取本地数据
+
 【已实现】keti5 业务模块主动调用我的 vip4 模块，可选地通过 url 传递参数，若传递则保存参数，并写入 task.json；若不传递或传递补全，则按原先默认情况处理
 【已实现】keti5 参数用于汇报任务进度和上传文件，上传文件是 task 目录所有内容zip压缩包。上传完成后清理压缩包
 【已实现】任务开始时进度为98%，完成后为100%，无其他进度推送。
 【已实现】任务完成后推送 task 压缩包。验证详情页，点击【上传到工厂】按钮可以手动上传文件给 keti5。任意进度都允许手动上传（作为中间结果上传时需要确认）
 【已完成】上传失败不重试，仅存最近失败状态
-【已完成】keti5 接口地址和回调认证由环境变量配置
+【已完成】keti5 地址认证在config.py配置，环境变量优先
