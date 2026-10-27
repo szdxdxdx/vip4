@@ -44,7 +44,12 @@ class Keti2Config:
 
 class Keti2Sources:
     def __init__(self, config: Keti2Config | None = None):
-        self.config = config or Keti2Config.from_env()
+        self._config = config
+
+    @property
+    def config(self):
+        # 默认实例按请求读取配置，显式注入的配置保持不变。
+        return self._config if self._config is not None else Keti2Config.from_env()
 
     def search(self, project_id: str) -> list[dict]:
         separator = '&' if '?' in self.config.search_url else '?'

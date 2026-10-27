@@ -74,7 +74,9 @@ status/chatstatus 支持 queued、running、paused、idle、completed、failed�
 
 ## 配置与测试
 
-业务地址在 `server/app/vip_task/config.py` 配置，修改后重启：KETI2_SEARCH_URL、KETI2_DOWNLOAD_URL（空字符串禁用路径下载）、KETI3_BASE_URL（默认 http://127.0.0.1:50053，不含 /api）。地址不读取环境变量。
+隐藏页 `/config/keti-ip` 可编辑课题二、三服务地址，以及课题五回调地址、上传地址和回调认证。保存后立即用于后续请求，无需重启；已发出的网络请求不变。配置持久化到项目根目录 `keti-ip.json`，文件权限为仅服务用户可读写，不纳入版本管理。优先级为持久化配置、环境变量、`server/app/vip_task/config.py` 默认值。课题二、三地址不包含接口路径，课题五使用完整接口地址。
+
+`GET /api/config/keti-ip` 读取当前六项配置，`PUT /api/config/keti-ip` 提交同名字符串字段并整体保存。配置页不提供导航入口；隐藏地址不是认证机制，仅应在可信环境访问。
 
 环境变量：VIP_PROJECT_DB 默认项目根 projects.sqlite3；VIP_SOURCE_PATH_MAP 默认 `{}`，JSON 路径前缀到本机目录映射，最长前缀优先且拒绝越界；VIP_SOURCE_TIMEOUT 默认 30 秒；VIP_KETI3_TIMEOUT 默认 120 秒。
 

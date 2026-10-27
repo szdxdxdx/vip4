@@ -22,8 +22,12 @@ MAX_ENTRIES = 10000
 
 class Keti3Sources:
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
-        self.base_url = (base_url if base_url is not None else config.KETI3_BASE_URL).rstrip('/')
+        self._base_url = base_url
         self.timeout = timeout if timeout is not None else float(os.getenv('VIP_KETI3_TIMEOUT', '120'))
+
+    @property
+    def base_url(self):
+        return (self._base_url if self._base_url is not None else config.KETI3_BASE_URL).rstrip('/')
 
     def _base(self):
         parts = urlsplit(self.base_url)

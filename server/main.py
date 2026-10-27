@@ -56,6 +56,7 @@ def create_app(backend_only: bool = False) -> FastAPI:
                         (perf_counter() - started) * 1000)
 
     if not backend_only:
+        @app.get('/config/keti-ip', include_in_schema=False)
         @app.get('/config/pi-models', include_in_schema=False)
         async def pi_models_page():
             return FileResponse(config.VIP_WEBUI_DIST_DIR / 'index.html')

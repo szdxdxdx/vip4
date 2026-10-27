@@ -1,3 +1,6 @@
 /projects.sqlite3
 /projects.sqlite3-*
 /tmp
+
+/keti-ip.json
+/keti-ip.tmp

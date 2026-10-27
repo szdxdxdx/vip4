@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PiModelsPage from './components/PiModelsPage.vue'
+import KetiIpPage from './components/KetiIpPage.vue'
 import FactoryUpload from './components/FactoryUpload.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import TaskSidebar from './components/TaskSidebar.vue'
@@ -9,6 +10,7 @@ import ProgressPanel from './components/ProgressPanel.vue'
 import ProjectPanel from './components/ProjectPanel.vue'
 import { useWorkbench } from './composables/useWorkbench'
 const isPiModelsPage = window.location?.pathname === '/config/pi-models'
+const isKetiIpPage = window.location?.pathname === '/config/keti-ip'
 const { tasks, selectedId, task, files, messages, listLoading, detailLoading, streamState,
   listError, detailError, streamError, deletingId, deleteError, removeTask, refreshTasks, selectTask,
   draft, chatBusy, chatError, canSend, canPause, sendMessage, pauseTask,
@@ -40,10 +42,11 @@ const views = [
   { id: 'files', label: '文件下载' },
 ] as const
 watch(selectedId, () => { activeView.value = 'conversation' }, { flush: 'sync' })
-onMounted(() => { if (!isPiModelsPage) initialize() })
+onMounted(() => { if (!isPiModelsPage && !isKetiIpPage) initialize() })
 </script>
 <template>
   <PiModelsPage v-if="isPiModelsPage" />
+  <KetiIpPage v-else-if="isKetiIpPage" />
   <div v-else class="workbench">
     <header class="app-header">
       <h1>软件IP验证</h1>
